@@ -30,6 +30,27 @@ EMOJI_ONLY_PATTERN = re.compile(
 # Bot message indicators in metadata
 BOT_SUBTYPES = {"bot_message", "channel_join", "channel_leave", "channel_topic", "channel_purpose"}
 
+# Slack app footers to strip from message content before ingestion
+# These are appended automatically by third-party Slack apps and add no signal
+FOOTER_PATTERNS = [
+    re.compile(r'\*?Sent using\*?\s+Claude\.?', re.IGNORECASE),
+    re.compile(r'\*?Sent via\*?\s+Claude\.?', re.IGNORECASE),
+    re.compile(r'\*?Powered by\*?\s+Claude\.?', re.IGNORECASE),
+    re.compile(r'\*?Sent using\*?\s+ChatGPT\.?', re.IGNORECASE),
+    re.compile(r'\*?Sent via\*?\s+ChatGPT\.?', re.IGNORECASE),
+    re.compile(r'\*?Sent with\*?\s+\w+AI\.?', re.IGNORECASE),
+]
+
+
+def clean_text(text: str) -> str:
+    """
+    Strip known app footers and signatures from message content.
+    Call this before passing content to the extraction pipeline.
+    """
+    for pattern in FOOTER_PATTERNS:
+        text = pattern.sub("", text)
+    return text.strip()
+
 
 def should_skip(text: str, metadata: dict = None) -> bool:
     """

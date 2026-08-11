@@ -330,14 +330,18 @@
         let html = `<div style="margin-bottom:12px">${data.answer || data.detail}</div>`;
 
         if (data.sources && data.sources.length > 0) {
-            html += `<div style="font-size:12px;color:#888;margin-bottom:8px">Sources used:</div>`;
+            html += `<div style="font-size:12px;color:#888;margin-bottom:8px;margin-top:4px">Sources used:</div>`;
             data.sources.forEach(s => {
-            if (s.source_id) {
-                html += `<div style="font-size:12px;margin-bottom:4px">
-                [${s.entity_type}] ${s.name || ""}
-                <button onclick="promoteSource(${s.source_id})" style="margin-left:8px;padding:2px 8px;font-size:11px;background:#2f855a">Save to memory</button>
+              if (s.source_id) {
+                const linkHtml = s.permalink
+                  ? `<a href="${s.permalink}" target="_blank" style="margin-left:8px;font-size:11px;color:#2b6cb0;text-decoration:underline">View in ${s.source_type || "source"} ↗</a>`
+                  : "";
+                html += `<div style="font-size:12px;margin-bottom:6px;padding:6px 8px;background:#f0f0f0;border-radius:4px">
+                  <span style="font-weight:600">[${s.entity_type}]</span> ${s.name || ""}
+                  ${linkHtml}
+                  <button onclick="promoteSource(${s.source_id})" style="margin-left:8px;padding:2px 8px;font-size:11px;background:#2f855a">Save to memory</button>
                 </div>`;
-            }
+              }
             });
         }
 

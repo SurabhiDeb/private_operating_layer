@@ -8,7 +8,7 @@ from models.sources import Source
 from models.channel_memberships import ChannelMembership
 from models.business_profile import BusinessProfile
 import uuid as uuid_lib
-from ingestion.pre_filter import should_skip, bundle_threads
+from ingestion.pre_filter import should_skip, bundle_threads, clean_text
 
 
 def _store_channel_memberships(org_id: str, channel_id: str, db: Session) -> None:
@@ -47,6 +47,8 @@ def backfill_slack(org_id: str, db: Session, days_back: int = 180) -> dict:
         if messages:
             # Filter noise then bundle threads before indexing
             messages = [m for m in messages if not should_skip(m["content"], m.get("metadata"))]
+            for m in messages:
+                m["content"] = clean_text(m["content"])
             messages = bundle_threads(messages)
             count = bulk_index_messages(
                 org_id=org_id,
@@ -85,8 +87,10 @@ def ingest_new_slack_messages(org_id: str, db: Session, since_hours: float = 24)
         is_private = channel.get("is_private", False)
         messages = get_new_messages(channel_id, days_back=since_hours / 24, workspace_domain=workspace_domain)
 
-        # Filter noise before pipeline
+        # Filter noise and clean footers before pipeline
         messages = [m for m in messages if not should_skip(m["content"], m.get("metadata"))]
+        for m in messages:
+            m["content"] = clean_text(m["content"])
         messages = bundle_threads(messages)
 
         for msg in messages:

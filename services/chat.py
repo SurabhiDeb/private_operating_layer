@@ -37,7 +37,8 @@ def search_memory(org_id: str, question: str, db: Session, limit: int = 5, user_
         # - private channels where the user is a member
         results = db.execute(
             text("""
-                SELECT e.id, e.entity_type, e.name, e.content, e.approved_by, e.source_id
+                SELECT e.id, e.entity_type, e.name, e.content, e.approved_by, e.source_id,
+                       s.permalink, s.source_type
                 FROM entities e
                 LEFT JOIN sources s ON e.source_id = s.id
                 WHERE e.org_id = :org_id
@@ -65,12 +66,14 @@ def search_memory(org_id: str, question: str, db: Session, limit: int = 5, user_
         # No user context — return all (used internally, not from user-facing endpoints)
         results = db.execute(
             text("""
-                SELECT id, entity_type, name, content, approved_by, source_id
-                FROM entities
-                WHERE org_id = :org_id
-                AND superseded_at IS NULL
-                AND embedding IS NOT NULL
-                ORDER BY embedding <=> CAST(:embedding AS vector)
+                SELECT e.id, e.entity_type, e.name, e.content, e.approved_by, e.source_id,
+                       s.permalink, s.source_type
+                FROM entities e
+                LEFT JOIN sources s ON e.source_id = s.id
+                WHERE e.org_id = :org_id
+                AND e.superseded_at IS NULL
+                AND e.embedding IS NOT NULL
+                ORDER BY e.embedding <=> CAST(:embedding AS vector)
                 LIMIT :limit
             """),
             {
@@ -109,7 +112,13 @@ Team size: {profile.team_size}
             for r in relevant
         )
         sources_used = [
-            {"source_id": r.source_id, "entity_type": r.entity_type, "name": r.name}
+            {
+                "source_id": r.source_id,
+                "entity_type": r.entity_type,
+                "name": r.name,
+                "permalink": r.permalink,
+                "source_type": r.source_type,
+            }
             for r in relevant if r.source_id
         ]
     else:
