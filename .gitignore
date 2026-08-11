@@ -1,0 +1,30 @@
+# Environment — never commit secrets
+.env
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Kuzu graph databases (per-org, generated at runtime)
+kuzu_data/
+
+# Uploads (client files, not code)
+uploads/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log

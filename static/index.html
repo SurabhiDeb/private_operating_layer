@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>EarlyEcho</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #111; }
+    header { background: #111; color: #fff; padding: 16px 24px; font-size: 18px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+    header span { font-size: 13px; font-weight: 400; opacity: 0.6; cursor: pointer; }
+    .container { max-width: 900px; margin: 32px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    input, textarea, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; }
+    button { background: #111; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    button:hover { background: #333; }
+    .btn-secondary { background: #fff; color: #111; border: 1px solid #ddd; }
+    .btn-secondary:hover { background: #f5f5f5; }
+    .answer { margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 6px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+    .entity { padding: 12px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 8px; font-size: 14px; }
+    .entity .type { font-weight: 600; color: #555; font-size: 12px; margin-bottom: 4px; }
+    .auth-wrap { max-width: 420px; margin: 80px auto; padding: 0 16px; }
+    .auth-wrap h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    .auth-wrap p { font-size: 14px; color: #555; margin-bottom: 24px; }
+    .auth-wrap label { font-size: 13px; font-weight: 500; display: block; margin-bottom: 4px; }
+    .auth-wrap button { width: 100%; padding: 12px; font-size: 15px; margin-bottom: 8px; }
+    .onboarding-wrap { max-width: 520px; margin: 80px auto; padding: 0 16px; }
+    .onboarding-wrap h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    .onboarding-wrap p { font-size: 14px; color: #555; margin-bottom: 32px; }
+    .onboarding-wrap label { font-size: 13px; font-weight: 500; display: block; margin-bottom: 4px; }
+    .onboarding-wrap button { width: 100%; padding: 12px; font-size: 15px; margin-bottom: 8px; }
+    .error { color: red; font-size: 13px; margin-top: 8px; display: none; }
+    .toggle-link { font-size: 13px; color: #555; text-align: center; margin-top: 8px; cursor: pointer; text-decoration: underline; }
+  </style>
+  <script src="https://unpkg.com/@nangohq/frontend/dist/index.js"></script>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginScreen" style="display:none">
+    <div class="auth-wrap">
+      <h1>Welcome back</h1>
+      <p>Sign in to your EarlyEcho workspace.</p>
+      <label>Email</label>
+      <input id="login_email" type="email" placeholder="you@company.com" />
+      <label>Password</label>
+      <input id="login_password" type="password" placeholder="••••••••" />
+      <button onclick="submitLogin()">Sign in</button>
+      <div class="error" id="loginError"></div>
+      <p class="toggle-link" onclick="showRegister()">No account yet? Create one</p>
+    </div>
+  </div>
+
+  <!-- REGISTER SCREEN -->
+  <div id="registerScreen" style="display:none">
+    <div class="onboarding-wrap">
+      <h1>Set up EarlyEcho</h1>
+      <p>Create your account and workspace in one step.</p>
+      <label>Email</label>
+      <input id="reg_email" type="email" placeholder="you@company.com" />
+      <label>Password</label>
+      <input id="reg_password" type="password" placeholder="••••••••" />
+      <label>Business name</label>
+      <input id="reg_name" type="text" placeholder="Acme Consulting" />
+      <label>Industry</label>
+      <input id="reg_industry" type="text" placeholder="Technology, Marketing..." />
+      <label>What do you do?</label>
+      <textarea id="reg_services" rows="2" placeholder="We build custom software..."></textarea>
+      <label>What do you NOT do?</label>
+      <textarea id="reg_not" rows="2" placeholder="We don't do hardware..."></textarea>
+      <label>Team size</label>
+      <input id="reg_size" type="number" placeholder="5" />
+      <button onclick="submitRegister()">Create workspace</button>
+      <div class="error" id="registerError"></div>
+      <p class="toggle-link" onclick="showLogin()">Already have an account? Sign in</p>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD -->
+  <div id="dashboardScreen" style="display:none">
+    <header>
+      EarlyEcho
+      <span onclick="logout()">Sign out</span>
+    </header>
+    <div class="container">
+
+      <div class="card">
+        <h2>Morning briefing</h2>
+        <button onclick="loadBriefing()">Load briefing</button>
+        <div id="briefingContent" class="answer" style="display:none"></div>
+      </div>
+
+      <div class="card">
+        <h2>Briefing settings</h2>
+        <p style="font-size:14px;color:#555;margin-bottom:12px">Tell the AI what to focus on in your morning briefing. Leave blank to use the default.</p>
+        <textarea id="briefingFocus" rows="3" placeholder="e.g. Focus on open client decisions, sales pipeline, and any team blockers."></textarea>
+        <button onclick="saveBriefingFocus()">Save</button>
+        <div id="briefingFocusResult" class="answer" style="display:none;margin-top:12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Ask a question</h2>
+        <textarea id="question" rows="3" placeholder="What is our contract policy?"></textarea>
+        <button onclick="askQuestion()">Ask</button>
+        <div id="chatAnswer" class="answer" style="display:none"></div>
+      </div>
+
+      <div class="card">
+        <h2>Memory browser</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="memoryFilter" style="width:auto;margin-bottom:0">
+            <option value="">All types</option>
+            <option value="Belief">Belief</option>
+            <option value="Decision">Decision</option>
+            <option value="Process">Process</option>
+            <option value="Client">Client</option>
+            <option value="Project">Project</option>
+            <option value="Person">Person</option>
+          </select>
+          <button onclick="loadMemory(0)">Load</button>
+        </div>
+        <div id="memoryList" style="margin-top:16px"></div>
+        <div id="memoryPager" style="margin-top:12px;display:none;gap:8px;display:flex"></div>
+      </div>
+
+      <!-- Approval Queue -->
+      <div class="card">
+        <h2>Approval queue</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="loadQueue()">Load queue</button>
+          <button onclick="bulkApprove()" class="btn-secondary">Approve all</button>
+          <button onclick="bulkReject()" class="btn-secondary" style="color:#c00">Reject all</button>
+        </div>
+        <div id="queueList" style="margin-top:16px"></div>
+      </div>
+
+      <!-- System Status -->
+      <div class="card">
+        <h2>System status</h2>
+        <button onclick="loadStatus()">Check status</button>
+        <div id="statusContent" style="margin-top:16px"></div>
+      </div>
+
+      <!-- Contradiction Flags -->
+      <div class="card">
+        <h2>Contradiction flags</h2>
+        <button onclick="loadContradictions()">Load flags</button>
+        <div id="contradictionList" style="margin-top:16px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Add to memory</h2>
+        <select id="entityType">
+          <option value="Belief">Belief</option>
+          <option value="Decision">Decision</option>
+          <option value="Process">Process</option>
+          <option value="Client">Client</option>
+          <option value="Project">Project</option>
+          <option value="Person">Person</option>
+        </select>
+        <input id="entityName" type="text" placeholder="Name (e.g. Contract first policy)" />
+        <textarea id="entityContent" rows="3" placeholder="Describe this fact..."></textarea>
+        <button onclick="addMemory()">Save to memory</button>
+        <div id="ingestResult" class="answer" style="display:none"></div>
+      </div>
+
+      <!-- Gmail connect -->
+      <div class="card">
+        <h2>Connect Gmail</h2>
+        <p style="font-size:14px;color:#555;margin-bottom:16px">First paste your Google Cloud OAuth credentials, then click Connect to authorise.</p>
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px">Client ID</label>
+        <input id="gmailClientId" type="text" placeholder="your-client-id.apps.googleusercontent.com" />
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px">Client Secret</label>
+        <input id="gmailClientSecret" type="text" placeholder="GOCSPX-..." />
+        <button onclick="saveGmailCredentials()" style="margin-right:8px">Save credentials</button>
+        <button onclick="connectGmail()" class="btn-secondary">Connect Gmail</button>
+        <div id="gmailResult" class="answer" style="display:none;margin-top:12px"></div>
+      </div>
+
+      <!-- Import data -->
+      <div class="card">
+        <h2>Import data</h2>
+        <p style="font-size:14px;color:#555;margin-bottom:16px">Export a CSV from any tool (HubSpot, Notion, Pipedrive, spreadsheet) and upload it here.</p>
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px">What type of data is this?</label>
+        <select id="csvEntityType" style="margin-bottom:12px">
+          <option value="Person">People / Contacts</option>
+          <option value="Client">Clients / Companies</option>
+          <option value="Project">Projects / Deals</option>
+          <option value="Process">Processes</option>
+          <option value="Decision">Decisions</option>
+          <option value="Belief">Beliefs</option>
+        </select>
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px">Upload CSV file</label>
+        <input type="file" id="csvFile" accept=".csv" style="margin-bottom:12px" />
+        <button onclick="uploadCSV()">Import</button>
+        <div id="csvResult" class="answer" style="display:none"></div>
+      </div>
+
+      <!-- Agent -->
+      <div class="card">
+        <h2>Agent</h2>
+        <p style="font-size:14px;color:#555;margin-bottom:16px">Give the agent a task. It will act only on verified memory.</p>
+        <select id="agentTaskType" style="margin-bottom:12px">
+          <option value="draft">Draft content</option>
+          <option value="flag">Flag contradiction</option>
+        </select>
+        <textarea id="agentTask" rows="3" placeholder="Draft a proposal for TechFlow based on what we know about them."></textarea>
+        <button onclick="runAgent()">Run agent</button>
+        <div id="agentResult" class="answer" style="display:none"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    let ORG_ID = localStorage.getItem("org_id") || "";
+
+    function init() {
+      if (ORG_ID) {
+        showDashboard();
+      } else {
+        showLogin();
+      }
+    }
+
+    function showLogin() {
+      hide("registerScreen");
+      hide("dashboardScreen");
+      show("loginScreen");
+    }
+
+    function showRegister() {
+      hide("loginScreen");
+      hide("dashboardScreen");
+      show("registerScreen");
+    }
+
+    function showDashboard() {
+      hide("loginScreen");
+      hide("registerScreen");
+      show("dashboardScreen");
+      loadBriefingFocus();
+    }
+
+    function show(id) { document.getElementById(id).style.display = "block"; }
+    function hide(id) { document.getElementById(id).style.display = "none"; }
+
+    function logout() {
+      localStorage.removeItem("org_id");
+      ORG_ID = "";
+      showLogin();
+    }
+
+    async function submitLogin() {
+      const email = document.getElementById("login_email").value.trim();
+      const password = document.getElementById("login_password").value;
+      const err = document.getElementById("loginError");
+      err.style.display = "none";
+
+      const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        ORG_ID = data.org_id;
+        localStorage.setItem("org_id", ORG_ID);
+        showDashboard();
+      } else {
+        err.textContent = data.detail || "Login failed.";
+        err.style.display = "block";
+      }
+    }
+
+    async function submitRegister() {
+      const err = document.getElementById("registerError");
+      err.style.display = "none";
+
+      const payload = {
+        email: document.getElementById("reg_email").value.trim(),
+        password: document.getElementById("reg_password").value,
+        business_name: document.getElementById("reg_name").value.trim(),
+        industry: document.getElementById("reg_industry").value.trim(),
+        core_services: document.getElementById("reg_services").value.trim(),
+        what_they_dont_do: document.getElementById("reg_not").value.trim(),
+        team_size: parseInt(document.getElementById("reg_size").value),
+      };
+
+      const res = await fetch("/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        ORG_ID = data.org_id;
+        localStorage.setItem("org_id", ORG_ID);
+        showDashboard();
+      } else {
+        err.textContent = data.detail || "Registration failed.";
+        err.style.display = "block";
+      }
+    }
+
+    async function loadBriefing() {
+      const el = document.getElementById("briefingContent");
+      el.style.display = "block";
+      el.textContent = "Loading...";
+      const res = await fetch(`/memory/briefing/${ORG_ID}`);
+      const data = await res.json();
+      el.textContent = data.briefing || data.message;
+    }
+
+    async function askQuestion() {
+        const question = document.getElementById("question").value.trim();
+        if (!question) return;
+        const el = document.getElementById("chatAnswer");
+        el.style.display = "block";
+        el.innerHTML = "Thinking...";
+
+        const res = await fetch("/chat/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ org_id: ORG_ID, question })
+        });
+        const data = await res.json();
+
+        let html = `<div style="margin-bottom:12px">${data.answer || data.detail}</div>`;
+
+        if (data.sources && data.sources.length > 0) {
+            html += `<div style="font-size:12px;color:#888;margin-bottom:8px">Sources used:</div>`;
+            data.sources.forEach(s => {
+            if (s.source_id) {
+                html += `<div style="font-size:12px;margin-bottom:4px">
+                [${s.entity_type}] ${s.name || ""}
+                <button onclick="promoteSource(${s.source_id})" style="margin-left:8px;padding:2px 8px;font-size:11px;background:#2f855a">Save to memory</button>
+                </div>`;
+            }
+            });
+        }
+
+        el.innerHTML = html;
+    }
+
+async function promoteSource(sourceId) {
+  const res = await fetch(`/memory/promote/${sourceId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ org_id: ORG_ID, approved_by: "dashboard" })
+  });
+  const data = await res.json();
+  alert(data.message || data.detail);
+}
+
+    async function loadMemory(offset = 0) {
+      const entityType = document.getElementById("memoryFilter").value;
+      const params = new URLSearchParams({ limit: 20, offset });
+      if (entityType) params.append("entity_type", entityType);
+      const res = await fetch(`/memory/list/${ORG_ID}?${params}`);
+      const data = await res.json();
+      const el = document.getElementById("memoryList");
+      const pager = document.getElementById("memoryPager");
+      if (!data.entities || data.entities.length === 0) {
+        el.innerHTML = "<p style='font-size:14px;color:#888'>No memory yet.</p>";
+        pager.style.display = "none";
+        return;
+      }
+      el.innerHTML = data.entities.map(e => `
+        <div class="entity">
+          <div class="type">${e.entity_type} ${e.name ? "· " + e.name : ""}</div>
+          <div>${e.content}</div>
+        </div>
+      `).join("");
+      // Pagination controls
+      const showing = offset + data.entities.length;
+      pager.style.display = "flex";
+      pager.innerHTML = `
+        <span style="font-size:13px;color:#888;align-self:center">Showing ${offset + 1}–${showing} of ${data.total}</span>
+        ${offset > 0 ? `<button class="btn-secondary" onclick="loadMemory(${offset - 20})" style="padding:6px 12px">← Prev</button>` : ""}
+        ${showing < data.total ? `<button class="btn-secondary" onclick="loadMemory(${offset + 20})" style="padding:6px 12px">Next →</button>` : ""}
+      `;
+    }
+
+    async function addMemory() {
+      const payload = {
+        org_id: ORG_ID,
+        source_type: "manual",
+        raw_content: document.getElementById("entityContent").value.trim(),
+        entity_type: document.getElementById("entityType").value,
+        entity_name: document.getElementById("entityName").value.trim(),
+        approved_by: "dashboard"
+      };
+      const el = document.getElementById("ingestResult");
+      el.style.display = "block";
+      el.textContent = "Saving...";
+      const res = await fetch("/memory/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      el.textContent = data.message || data.detail;
+    }
+    async function connectHubspot() {
+        const el = document.getElementById("integrationResult");
+        el.style.display = "block";
+        el.textContent = "Opening HubSpot login...";
+
+        const nango = new Nango({ publicKey: "YOUR_NANGO_PUBLIC_KEY" });
+        const connectionId = ORG_ID;
+
+        try {
+            await nango.auth("hubspot", connectionId);
+            el.textContent = "Connected! Importing data...";
+
+            const res = await fetch("/integrations/hubspot/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ org_id: ORG_ID, connection_id: connectionId })
+            });
+            const data = await res.json();
+            el.textContent = data.message + ` (${data.contacts_imported} contacts, ${data.deals_imported} deals)`;
+        } catch (err) {
+            el.textContent = "Connection failed: " + err.message;
+        }
+    }
+
+    async function uploadCSV() {
+        const file = document.getElementById("csvFile").files[0];
+        const entityType = document.getElementById("csvEntityType").value;
+        const el = document.getElementById("csvResult");
+
+        if (!file) return alert("Please select a CSV file.");
+        if (!ORG_ID) return alert("Set org_id first.");
+
+        el.style.display = "block";
+        el.textContent = "Uploading...";
+
+        const formData = new FormData();
+        formData.append("org_id", ORG_ID);
+        formData.append("entity_type", entityType);
+        formData.append("file", file);
+
+        const res = await fetch("/integrations/csv/import", {
+            method: "POST",
+            body: formData,
+        });
+
+        const data = await res.json();
+        el.textContent = data.message + (data.imported ? ` ${data.imported} records imported.` : "");
+    }
+
+    async function loadQueue() {
+      const el = document.getElementById("queueList");
+      const res = await fetch(`/context/pending/${ORG_ID}?review_type=standard`);
+      const data = await res.json();
+
+      if (!data || data.length === 0) {
+        el.innerHTML = "<p style='font-size:14px;color:#888'>No items pending review.</p>";
+        return;
+      }
+
+      el.innerHTML = data.map(p => `
+        <div class="entity" id="queue-item-${p.id}">
+          <div class="type">${p.entity_type} ${p.name ? "· " + p.name : ""}
+            ${p.confidence_score ? `<span style="color:#888;font-weight:400"> · confidence ${Math.round(p.confidence_score * 100)}%</span>` : ""}
+          </div>
+          <div style="margin-bottom:8px">${p.content}</div>
+          <div style="font-size:12px;color:#888;margin-bottom:8px">Critic note: ${p.critic_reason || ""}</div>
+          <button onclick="approveEntity(${p.id})" style="margin-right:8px">Approve</button>
+          <button onclick="rejectEntity(${p.id})" style="background:#e53e3e">Reject</button>
+        </div>
+      `).join("");
+    }
+
+    async function approveEntity(id) {
+      const res = await fetch(`/memory/queue/${id}/approve?approved_by=dashboard`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      document.getElementById(`queue-item-${id}`).remove();
+    }
+
+    async function rejectEntity(id) {
+      const res = await fetch(`/memory/queue/${id}/reject`, {
+        method: "DELETE",
+      });
+      document.getElementById(`queue-item-${id}`).remove();
+    }
+
+    async function runAgent() {
+      const task = document.getElementById("agentTask").value.trim();
+      const taskType = document.getElementById("agentTaskType").value;
+      const el = document.getElementById("agentResult");
+
+      if (!task) return alert("Enter a task.");
+      if (!ORG_ID) return alert("Set org_id first.");
+
+      el.style.display = "block";
+      el.textContent = "Agent thinking...";
+
+      const res = await fetch("/agent/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org_id: ORG_ID, task, task_type: taskType })
+      });
+
+      const data = await res.json();
+      if (data.blocked) {
+        el.textContent = "BLOCKED: " + data.block_reason;
+      } else {
+        el.textContent = data.result;
+      }
+    }
+
+    async function loadContradictions() {
+      const el = document.getElementById("contradictionList");
+      const res = await fetch(`/context/pending/${ORG_ID}?review_type=contradiction`);
+      const data = await res.json();
+
+      if (!data || data.length === 0) {
+        el.innerHTML = "<p style='font-size:14px;color:#888'>No contradiction flags.</p>";
+        return;
+      }
+
+      el.innerHTML = data.map(c => `
+        <div class="entity" style="border-left:3px solid #e53e3e" id="queue-item-${c.id}">
+          <div style="font-size:12px;color:#e53e3e;margin-bottom:4px">Contradiction detected</div>
+          <div style="font-size:14px;white-space:pre-wrap;margin-bottom:8px">${c.content}</div>
+          <div style="font-size:12px;color:#888;margin-bottom:8px">${c.critic_reason || ""}</div>
+          <button onclick="approveEntity(${c.id})" style="margin-right:8px">Keep new</button>
+          <button onclick="rejectEntity(${c.id})" style="background:#e53e3e">Discard</button>
+          <div style="font-size:11px;color:#aaa;margin-top:8px">${c.created_at}</div>
+        </div>
+      `).join("");
+    }
+
+    function timeAgo(isoString) {
+      if (!isoString) return "Never";
+      const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    async function loadStatus() {
+      const el = document.getElementById("statusContent");
+      el.innerHTML = "Checking...";
+
+      const [healthRes, backfillRes, usageRes, statusRes] = await Promise.all([
+        fetch(`/integrations/slack/health/${ORG_ID}`),
+        fetch(`/integrations/slack/backfill/status/${ORG_ID}`),
+        fetch(`/context/usage/${ORG_ID}`),
+        fetch(`/integrations/status/${ORG_ID}`),
+      ]);
+
+      const health = await healthRes.json();
+      const backfill = await backfillRes.json();
+      const usage = await usageRes.json();
+      const status = await statusRes.json();
+
+      const slackColor = health.healthy ? "#2f855a" : "#e53e3e";
+      const slackLabel = health.healthy ? "Connected" : "Disconnected";
+      const gmailColor = status.gmail_connected ? "#2f855a" : "#888";
+      const gmailLabel = status.gmail_connected ? "Connected" : "Not connected";
+
+      const pct = backfill.percent_complete || 0;
+      const usagePct = usage.budget_limit > 0
+        ? Math.round(usage.tokens_used / usage.budget_limit * 100)
+        : 0;
+
+      el.innerHTML = `
+        <div style="display:grid;gap:12px">
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">SLACK</div>
+            <div style="font-size:14px;color:${slackColor};font-weight:600">${slackLabel}</div>
+            ${health.workspace ? `<div style="font-size:12px;color:#888">${health.workspace} · ${health.bot_user}</div>` : ""}
+            ${health.error ? `<div style="font-size:12px;color:#e53e3e">${health.error}</div>` : ""}
+          </div>
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">GMAIL</div>
+            <div style="font-size:14px;color:${gmailColor};font-weight:600">${gmailLabel}</div>
+          </div>
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">LAST SYNCED</div>
+            <div style="font-size:14px">${timeAgo(status.last_sync_at)}</div>
+          </div>
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">MEMORY</div>
+            <div style="font-size:14px">${status.total_memories.toLocaleString()} facts stored</div>
+            ${status.pending_count > 0 ? `<div style="font-size:12px;color:#d97706;margin-top:4px">${status.pending_count} item${status.pending_count > 1 ? "s" : ""} waiting for review</div>` : ""}
+          </div>
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">BACKFILL</div>
+            <div style="font-size:14px">${backfill.processed} / ${backfill.total_backfill_sources} processed (${pct}%)</div>
+            <div style="background:#eee;border-radius:4px;height:6px;margin-top:8px">
+              <div style="background:#2f855a;width:${pct}%;height:6px;border-radius:4px"></div>
+            </div>
+          </div>
+          <div style="padding:12px;border:1px solid #eee;border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">TOKEN USAGE — ${usage.month || ""}</div>
+            <div style="font-size:14px">${(usage.tokens_used || 0).toLocaleString()} / ${(usage.budget_limit || 0).toLocaleString()} tokens (${usagePct}%)</div>
+            <div style="background:#eee;border-radius:4px;height:6px;margin-top:8px">
+              <div style="background:${usagePct > 80 ? "#e53e3e" : "#2f855a"};width:${usagePct}%;height:6px;border-radius:4px"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveGmailCredentials() {
+      const clientId = document.getElementById("gmailClientId").value.trim();
+      const clientSecret = document.getElementById("gmailClientSecret").value.trim();
+      const el = document.getElementById("gmailResult");
+      if (!clientId || !clientSecret) return alert("Enter both client ID and secret.");
+      el.style.display = "block";
+      el.textContent = "Saving...";
+      const res = await fetch(`/integrations/gmail/credentials/${ORG_ID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+      });
+      const data = await res.json();
+      el.textContent = data.message || data.detail;
+    }
+
+    function connectGmail() {
+      window.location.href = `/integrations/gmail/connect/${ORG_ID}`;
+    }
+
+    async function bulkApprove() {
+      if (!confirm("Approve all items in the queue?")) return;
+      const res = await fetch(`/queue/bulk-approve/${ORG_ID}?approved_by=bulk`, { method: "POST" });
+      const data = await res.json();
+      document.getElementById("queueList").innerHTML = `<p style="color:green">${data.message}</p>`;
+    }
+
+    async function bulkReject() {
+      if (!confirm("Reject and delete all items in the queue? This cannot be undone.")) return;
+      const res = await fetch(`/queue/bulk-reject/${ORG_ID}`, { method: "DELETE" });
+      const data = await res.json();
+      document.getElementById("queueList").innerHTML = `<p style="color:#c00">${data.message}</p>`;
+    }
+
+    async function loadBriefingFocus() {
+      if (!ORG_ID) return;
+      const res = await fetch(`/onboarding/briefing-focus/${ORG_ID}`);
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById("briefingFocus").value = data.briefing_focus || "";
+      }
+    }
+
+    async function saveBriefingFocus() {
+      const focus = document.getElementById("briefingFocus").value.trim();
+      const result = document.getElementById("briefingFocusResult");
+      const res = await fetch(`/onboarding/briefing-focus/${ORG_ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ briefing_focus: focus })
+      });
+      const data = await res.json();
+      result.style.display = "block";
+      result.textContent = res.ok ? "Saved. Your next briefing will reflect this." : (data.detail || "Save failed.");
+    }
+
+    init();
+  </script>
+</body>
+</html>

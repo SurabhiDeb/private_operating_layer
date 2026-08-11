@@ -1,0 +1,11 @@
+[Unit]
+Description=EarlyEcho Watchdog — runs every 5 minutes
+Requires=earlyecho-watchdog.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=earlyecho-watchdog.service
+
+[Install]
+WantedBy=timers.target

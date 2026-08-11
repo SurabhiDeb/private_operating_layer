@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>EarlyEcho — Private AI Operating Layer</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:           #060708;
+      --surface:      #0c0d0f;
+      --border:       rgba(255,255,255,0.07);
+      --border-gold:  rgba(184,150,60,0.22);
+      --gold:         #b8963c;
+      --gold-light:   #d4af5a;
+      --gold-dim:     rgba(184,150,60,0.1);
+      --cream:        #ede9e2;
+      --muted:        #636466;
+      --secondary:    #9a9b9d;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--cream);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── NAV ── */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 24px 60px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(6,7,8,0.9);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo {
+      font-family: 'DM Serif Display', serif;
+      font-size: 21px;
+      color: var(--cream);
+    }
+    .logo em { font-style: italic; color: var(--gold); }
+    .nav-cta {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--bg);
+      background: var(--gold);
+      padding: 10px 26px;
+      border-radius: 2px;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+    .nav-cta:hover { background: var(--gold-light); }
+
+    /* ── HERO ── */
+    .hero {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 116px 32px 96px;
+      text-align: center;
+    }
+    .eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 32px;
+    }
+    .hero h1 {
+      font-family: 'DM Serif Display', serif;
+      font-size: clamp(38px, 5.5vw, 64px);
+      font-weight: 400;
+      line-height: 1.08;
+      letter-spacing: -0.02em;
+      color: var(--cream);
+      margin-bottom: 22px;
+    }
+    .hero h1 em { font-style: italic; color: var(--gold); }
+    .hero-quote {
+      font-family: 'DM Serif Display', serif;
+      font-style: italic;
+      font-size: 16px;
+      color: var(--muted);
+      margin-bottom: 22px;
+    }
+    .hero-sub {
+      font-size: 17px;
+      color: var(--secondary);
+      line-height: 1.8;
+      max-width: 520px;
+      margin: 0 auto 44px;
+    }
+    .btn-primary {
+      display: inline-block;
+      background: var(--gold);
+      color: var(--bg);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 14px 36px;
+      border-radius: 2px;
+      text-decoration: none;
+      transition: background 0.2s, transform 0.15s;
+    }
+    .btn-primary:hover { background: var(--gold-light); transform: translateY(-1px); }
+
+    /* ── LAYOUT ── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    .section {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 80px 32px;
+    }
+    .label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      font-family: 'DM Serif Display', serif;
+      font-size: clamp(26px, 3.2vw, 38px);
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--cream);
+      margin-bottom: 16px;
+      line-height: 1.2;
+    }
+    .section > p, .section > p + p {
+      font-size: 15px;
+      color: var(--secondary);
+      line-height: 1.8;
+      max-width: 640px;
+      margin-bottom: 14px;
+    }
+
+    /* ── STEPS ── */
+    .steps { margin-top: 48px; }
+    .step {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      gap: 24px;
+      padding: 28px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+    .step:last-child { border-bottom: none; }
+    .step-n {
+      font-family: 'DM Serif Display', serif;
+      font-style: italic;
+      font-size: 28px;
+      color: var(--gold);
+      opacity: 0.45;
+      padding-top: 2px;
+    }
+    .step h3 { font-size: 15px; font-weight: 600; color: var(--cream); margin-bottom: 6px; }
+    .step p { font-size: 14px; color: var(--muted); line-height: 1.75; }
+
+    /* ── ACCURACY ── */
+    .accuracy-block {
+      margin-top: 36px;
+      border: 1px solid var(--border-gold);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .acc-row {
+      display: grid;
+      grid-template-columns: 1fr 28px 1fr;
+      align-items: center;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .acc-row:last-child { border-bottom: none; }
+    .acc-row.flagged { background: rgba(160,50,30,0.06); }
+    .acc-row.passed  { background: rgba(40,90,55,0.09); }
+    .acc-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .acc-text { font-size: 13px; color: var(--secondary); line-height: 1.6; }
+    .acc-text strong { color: var(--cream); font-weight: 600; }
+    .acc-arrow { text-align: center; color: var(--gold); opacity: 0.35; font-size: 14px; }
+    .flagged .acc-text { color: #b07860; }
+    .passed  .acc-text { color: #6aaa7a; }
+
+    /* ── CHECKLIST ── */
+    .checklist { margin-top: 40px; display: flex; flex-direction: column; gap: 13px; }
+    .check-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      font-size: 14px;
+      color: var(--secondary);
+      line-height: 1.55;
+    }
+    .check-mark {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--gold-dim);
+      border: 1px solid var(--border-gold);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+      font-size: 9px;
+      color: var(--gold);
+    }
+    .badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 2px;
+      font-weight: 500;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .badge-live { background: rgba(50,120,70,0.18); color: #5ab87a; }
+    .badge-next { background: var(--gold-dim); color: var(--gold); }
+
+    /* ── PHASES ── */
+    .phases {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 40px;
+    }
+    .phase {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 28px 26px;
+      background: var(--surface);
+    }
+    .phase.active { border-color: var(--border-gold); }
+    .phase-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .phase-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 2px;
+    }
+    .phase-tag.now  { background: rgba(50,120,70,0.18); color: #5ab87a; }
+    .phase-tag.next { background: var(--gold-dim); color: var(--gold); }
+    .phase h3 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 17px;
+      font-weight: 400;
+      color: var(--cream);
+    }
+    .phase ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+    .phase li {
+      font-size: 13px;
+      color: var(--muted);
+      padding-left: 14px;
+      position: relative;
+      line-height: 1.6;
+    }
+    .phase li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--gold);
+      font-size: 10px;
+      opacity: 0.5;
+    }
+
+    /* ── PRICING CALLOUT ── */
+    .pricing-callout {
+      margin-top: 36px;
+      border: 1px solid var(--border-gold);
+      border-radius: 4px;
+      padding: 28px 32px;
+      background: rgba(184,150,60,0.04);
+    }
+    .pricing-callout p {
+      font-size: 15px;
+      color: var(--secondary);
+      line-height: 1.8;
+      margin-bottom: 0;
+    }
+    .pricing-callout p + p { margin-top: 10px; }
+    .pricing-callout strong { color: var(--cream); font-weight: 600; }
+
+    /* ── WHO IT'S FOR ── */
+    .audience-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 40px;
+    }
+    .audience-card {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 24px 26px;
+      background: var(--surface);
+    }
+    .audience-card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--cream);
+      margin-bottom: 8px;
+    }
+    .audience-card p { font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+    /* ── DIFF LIST ── */
+    .diff-list { margin-top: 44px; }
+    .diff-item {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 32px;
+      padding: 26px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+    .diff-item:last-child { border-bottom: none; }
+    .diff-label {
+      font-family: 'DM Serif Display', serif;
+      font-style: italic;
+      font-size: 14px;
+      color: var(--gold);
+      opacity: 0.75;
+      padding-top: 2px;
+      line-height: 1.4;
+    }
+    .diff-body h3 { font-size: 15px; font-weight: 600; color: var(--cream); margin-bottom: 6px; }
+    .diff-body p { font-size: 13px; color: var(--muted); line-height: 1.75; }
+    .diff-why {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--gold);
+      opacity: 0.65;
+      margin-top: 10px;
+      line-height: 1.6;
+      padding-top: 10px;
+      border-top: 1px solid rgba(184,150,60,0.12);
+    }
+
+    /* ── PRIVACY ── */
+    .privacy-section {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 72px 32px;
+    }
+    .privacy-inner {
+      max-width: 760px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 64px;
+      align-items: center;
+    }
+    .privacy-inner h2 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 28px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--cream);
+      margin-bottom: 12px;
+      line-height: 1.2;
+    }
+    .privacy-inner p { font-size: 14px; color: var(--muted); line-height: 1.8; }
+    .priv-points { display: flex; flex-direction: column; gap: 12px; }
+    .priv-point {
+      font-size: 14px;
+      color: var(--secondary);
+      line-height: 1.55;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .priv-point::before {
+      content: '✦';
+      color: var(--gold);
+      font-size: 8px;
+      margin-top: 5px;
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+
+    /* ── CTA ── */
+    .cta-section {
+      text-align: center;
+      padding: 100px 32px;
+    }
+    .cta-section h2 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 36px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--cream);
+      margin-bottom: 12px;
+    }
+    .cta-section p { font-size: 15px; color: var(--muted); margin-bottom: 36px; }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 32px;
+      text-align: center;
+      font-size: 12px;
+      color: #2e2f31;
+    }
+
+    @media (max-width: 680px) {
+      nav { padding: 18px 24px; }
+      .hero { padding: 80px 24px 70px; }
+      .phases { grid-template-columns: 1fr; }
+      .audience-grid { grid-template-columns: 1fr; }
+      .diff-item { grid-template-columns: 1fr; gap: 6px; }
+      .privacy-inner { grid-template-columns: 1fr; gap: 36px; }
+      .acc-row { grid-template-columns: 1fr; }
+      .acc-arrow { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <div class="logo">Early<em>Echo</em></div>
+    <a class="nav-cta" href="mailto:debsurabhi30@gmail.com">Get in touch</a>
+  </nav>
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="eyebrow">Private · Verified · Done for You</div>
+    <h1>The brain your company never had —<br><em>a private AI operating layer for your team.</em></h1>
+    <p class="hero-quote">"Where did we land on that?" "Who made that call?" "Wait — when did that change?"</p>
+    <p class="hero-sub">Your entire company's knowledge, verified and searchable — running on a private server built only for you. No shared infrastructure. No exposure. One brain, fully yours.</p>
+    <a class="btn-primary" href="mailto:debsurabhi30@gmail.com">Request early access</a>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- THE PROBLEM -->
+  <div class="section">
+    <div class="label">The problem</div>
+    <h2>Teams run on knowledge that is scattered, unorganised, and impossible to find.</h2>
+    <p>What a team knows is buried across Slack threads, email chains, documents, and people's heads — unorganised, rarely searchable, and constantly costing time. Jumping between tools to find a decision made three months ago. Context that vanishes when someone leaves. Chaos that scales as the team grows.</p>
+    <p>The tools that exist either require someone to write things down manually — which never happens consistently — or were built for enterprises with IT departments. Nobody built something for the teams that need it most. EarlyEcho is that solution.</p>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- WHAT WE BUILT -->
+  <div class="section">
+    <div class="label">How it works</div>
+    <h2>Set it up once. It runs every day.</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-n">01</div>
+        <div>
+          <h3>Tell us how your business works</h3>
+          <p>A two-minute onboarding — business name, what you do, what you don't, team size. That is the only form a client ever fills in manually.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">02</div>
+        <div>
+          <h3>Connect your tools</h3>
+          <p>Slack and Gmail connect directly. We also import the last six months of Slack history on day one — so memory starts full, not empty. For every other tool — HubSpot, Notion, Pipedrive, any spreadsheet — clients upload a CSV or Excel export. Native direct connections to project management tools are coming in Phase 2.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">03</div>
+        <div>
+          <h3>It reads, learns, and builds memory daily</h3>
+          <p>Every day, EarlyEcho reads new messages, emails, and documents. Facts stated clearly are stored automatically. Anything uncertain or conflicting is held for a one-click human review. The team stays in control of what enters their memory.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">04</div>
+        <div>
+          <h3>Ask. Brief. Act.</h3>
+          <p>Query the memory in plain language and get cited answers — every response traces back to its original source. A daily briefing surfaces what matters before the day starts. The agent drafts, prepares, and acts — but only from verified memory, and only when asked.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ACCURACY -->
+  <div class="section">
+    <div class="label">How accuracy works</div>
+    <h2>Every fact is checked before it enters memory</h2>
+    <p>A dedicated review layer reads every extraction before anything is stored. It checks: is this actually stated in the source? Does it conflict with existing memory? Facts above a confidence threshold are stored automatically. Everything else goes to a one-click human review queue. The system also tests itself regularly against a set of known questions — flagging any drift in accuracy before it reaches the team.</p>
+    <div class="accuracy-block">
+      <div class="acc-row">
+        <div>
+          <div class="acc-label">Source message</div>
+          <div class="acc-text">"gonna push the go-live to the 28th"</div>
+        </div>
+        <div class="acc-arrow">→</div>
+        <div>
+          <div class="acc-label">Proposed fact</div>
+          <div class="acc-text"><strong>Decision:</strong> Launch delayed to 2023-11-28</div>
+        </div>
+      </div>
+      <div class="acc-row flagged">
+        <div>
+          <div class="acc-label">Review check</div>
+          <div class="acc-text">Source says "the 28th" only — no month, no year. Date was invented.</div>
+        </div>
+        <div class="acc-arrow">→</div>
+        <div>
+          <div class="acc-label">Result</div>
+          <div class="acc-text">⚠ Flagged. Sent to approval queue.</div>
+        </div>
+      </div>
+      <div class="acc-row passed">
+        <div>
+          <div class="acc-label">Source message</div>
+          <div class="acc-text">"dropping Cobalt Retail — margins too thin after scope crept 3 times"</div>
+        </div>
+        <div class="acc-arrow">→</div>
+        <div>
+          <div class="acc-label">Result</div>
+          <div class="acc-text">✓ Stored. <strong>Decision:</strong> Drop Cobalt Retail — thin margins, 3× scope creep.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- WHAT'S LIVE / WHAT'S NEXT -->
+  <div class="section">
+    <div class="label">What's built</div>
+    <h2>Live today and what comes next</h2>
+    <div class="checklist">
+      <div class="check-item"><div class="check-mark">✓</div>Private dedicated environment per client — fully isolated from other organisations <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Slack connection with full 6-month message history import on day one <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Gmail connection — reads and ingests email threads automatically <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Email BCC ingestion — BCC a unique address on any thread and it enters memory <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Document ingestion — upload PDFs, Word files, and Excel sheets directly <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>CSV and Excel import from any tool — HubSpot, Notion, Pipedrive, spreadsheets <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Three-tier confidence routing — auto-approve above 80%, human review 50–79%, auto-reject below 50% <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Approval queue with one-click human review for uncertain facts <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Automatic contradiction detection — new facts flagged when they conflict with existing memory <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Chat agent with cited, sourced answers — every response traces back to its origin <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>AI agent — drafts and prepares, acts only on verified memory, only when asked <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Customisable daily morning briefing <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Full audit trail — every fact, every approval, every source, every change <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Self-monitoring — system tests itself against known questions monthly and flags accuracy drift <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Token usage tracking with monthly budget cap per organisation <span class="badge badge-live">Live</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Native direct integrations with project management tools and CRMs <span class="badge badge-next">Phase 2</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Meeting transcript and voice memo ingestion <span class="badge badge-next">Phase 2</span></div>
+      <div class="check-item"><div class="check-mark">✓</div>Self-serve control panel — clients deploy and manage their own environment <span class="badge badge-next">Phase 2</span></div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- HOW WE DELIVER -->
+  <div class="section">
+    <div class="label">How we deliver it</div>
+    <h2>Done for you today. Scalable infrastructure tomorrow.</h2>
+    <p>EarlyEcho is being built in two deliberate phases. The first is intentionally personal — we onboard each client directly, configure their environment, connect their tools, and manage the system. This lets us build something that actually works before we scale how we deliver it.</p>
+    <div class="phases">
+      <div class="phase active">
+        <div class="phase-header">
+          <span class="phase-tag now">Now — Phase 1</span>
+          <h3>Done for you</h3>
+        </div>
+        <ul>
+          <li>We onboard each client personally</li>
+          <li>Private environment configured and managed for them</li>
+          <li>First cohort of clients bring their own AI provider credentials — they own the data pipeline end-to-end, we handle everything else</li>
+          <li>Intentionally limited capacity — we are selective about who we onboard</li>
+          <li>Direct relationship with every client</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-header">
+          <span class="phase-tag next">Next — Phase 2</span>
+          <h3>Managed SaaS</h3>
+        </div>
+        <ul>
+          <li>Self-serve control panel — clients deploy their own environment</li>
+          <li>We manage the AI infrastructure and private server layer</li>
+          <li>Flat monthly pricing with a capped usage allowance included</li>
+          <li>Still single-tenant — every client gets their own dedicated environment</li>
+          <li>Scales to any team size without architectural changes</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- PRICING PHILOSOPHY -->
+  <div class="section">
+    <div class="label">Pricing</div>
+    <h2>Premium value. Not a per-seat commodity.</h2>
+    <p>Most productivity SaaS charges $20–30 per seat per month and leaves teams to figure out configuration, maintenance, and adoption on their own. EarlyEcho is not that.</p>
+    <div class="pricing-callout">
+      <p>EarlyEcho is a <strong>managed operating system for a business</strong> — deployed, connected, and maintained. The price reflects the outcome delivered, not a seat count. A working company memory that saves hours every week and prevents costly context loss is worth significantly more than another subscription a team has to babysit.</p>
+      <p>Phase 2 moves to a <strong>flat monthly managed tier</strong> — predictable, capped, and inclusive of infrastructure. No surprise usage bills. No per-seat math. One price for a system that works.</p>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- WHO IT'S FOR -->
+  <div class="section">
+    <div class="label">Who it's for</div>
+    <h2>Starting with small teams. Built to serve anyone.</h2>
+    <p>The future of work is being built by small teams. They are already the fastest-growing segment — lean, fast-moving, operating at a complexity their headcount doesn't suggest. But no tool has been built truly for them. Enterprise tools assume IT departments, long implementation cycles, and dedicated resources most teams simply don't have. That is why we are prioritising them first.</p>
+    <p>That does not mean we cannot serve larger organisations. The architecture scales to any headcount — a team of 10 and a team of 500 run the same system, the difference is configuration, not capability. We can and will grow with our clients. But we genuinely believe in small teams and what they represent. They are in the most need, being left behind by every tool that defaults to enterprise first, and they are the ones we are building for.</p>
+    <div class="audience-grid">
+      <div class="audience-card">
+        <h3>Where we start</h3>
+        <p>Teams of 5 to 50. Agencies, consultancies, early-stage companies, professional service firms — places where one person leaving takes half the company's operating knowledge with them and where no IT team exists to fix it.</p>
+      </div>
+      <div class="audience-card">
+        <h3>Where we grow</h3>
+        <p>Any organisation that has outgrown informal context-sharing. The same single-tenant architecture, the same accuracy guarantees, the same private server — at any headcount, without rebuilding anything.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- WHY EARLYECHO -->
+  <div class="section">
+    <div class="label">Why EarlyEcho</div>
+    <h2>What every other tool in this space got wrong.</h2>
+    <div class="diff-list">
+
+      <div class="diff-item">
+        <div class="diff-label">The capture problem</div>
+        <div class="diff-body">
+          <h3>Search tools can only find what was written down</h3>
+          <p>Notion, Confluence, and Guru all require someone to deliberately write things down. Nobody does this consistently. EarlyEcho captures knowledge from conversations that were never formally documented — decisions in Slack, context in emails, beliefs the team has never put in writing. Then it verifies them before storing.</p>
+          <div class="diff-why">The knowledge loss problem is not a search problem. It is a capture problem. Nobody was solving that.</div>
+        </div>
+      </div>
+
+      <div class="diff-item">
+        <div class="diff-label">The trust problem</div>
+        <div class="diff-body">
+          <h3>AI that writes things down confidently is dangerous</h3>
+          <p>Most AI memory tools store whatever they extract without checking it. EarlyEcho runs every extraction through a dedicated review layer before storing. High-confidence facts go in automatically. Anything uncertain goes to human review. The team always knows what's in there and why.</p>
+          <div class="diff-why">A memory your team doesn't trust is worse than no memory. Accuracy is not optional.</div>
+        </div>
+      </div>
+
+      <div class="diff-item">
+        <div class="diff-label">The isolation problem</div>
+        <div class="diff-body">
+          <h3>Multi-tenant tools share more than teams realise</h3>
+          <p>Most SaaS tools run all customers on shared infrastructure. Client conversations, pricing decisions, and internal processes sit in a multi-tenant database. EarlyEcho gives every client a fully isolated, dedicated private environment. No shared pipelines, no shared databases, no risk of bleed between organisations.</p>
+          <div class="diff-why">Your company's operating knowledge should not be adjacent to anyone else's. Single-tenant is the only right architecture for this.</div>
+        </div>
+      </div>
+
+      <div class="diff-item">
+        <div class="diff-label">The autonomy problem</div>
+        <div class="diff-body">
+          <h3>Teams aren't ready to hand control to autonomous agents</h3>
+          <p>Every AI product today races to claim maximum autonomy. EarlyEcho takes the opposite position. The agent is a secretary — it acts when asked, from verified memory only, and takes on more autonomy only when the team decides they're ready. Trust is built gradually, not assumed.</p>
+          <div class="diff-why">Autonomy without trust is a liability. We let teams set the pace.</div>
+        </div>
+      </div>
+
+      <div class="diff-item">
+        <div class="diff-label">The enterprise gap</div>
+        <div class="diff-body">
+          <h3>Every serious tool was built for companies with IT departments</h3>
+          <p>Glean requires enterprise contracts and dedicated implementation. The tools that do exist for smaller teams are either too lightweight to be serious or too complex to be adopted without a technical owner. EarlyEcho is done for you — no internal technical resource required, no lengthy setup, working from day one.</p>
+          <div class="diff-why">Small and mid-size teams are not a smaller version of enterprises. They need a different product, not a stripped-down one.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- PRIVACY -->
+  <div class="privacy-section">
+    <div class="privacy-inner">
+      <div>
+        <div class="label">Infrastructure and privacy</div>
+        <h2>A private server that belongs only to you.</h2>
+        <p>Every client runs in a fully isolated, dedicated environment. This is the architectural moat. It means your company's operating knowledge — client names, pricing decisions, internal processes — never sits in a shared database or travels through shared pipelines. The private server is not a feature. It is the foundation the whole product is built on.</p>
+      </div>
+      <div class="priv-points">
+        <div class="priv-point">Dedicated environment per client — no shared infrastructure, ever</div>
+        <div class="priv-point">Data fully isolated — never visible or accessible to other organisations</div>
+        <div class="priv-point">Credentials never passed into the AI — handled at the secure boundary</div>
+        <div class="priv-point">Full audit trail — every fact, every approval, every source, every change</div>
+        <div class="priv-point">Token usage capped per organisation — no runaway costs, no surprises</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CTA -->
+  <div class="cta-section">
+    <h2>We are onboarding our first cohort now.</h2>
+    <p>EarlyEcho is in early access. We are selective about who we work with at this stage.</p>
+    <a class="btn-primary" href="mailto:debsurabhi30@gmail.com">Get in touch</a>
+  </div>
+
+  <footer>© 2026 EarlyEcho. All rights reserved.</footer>
+
+</body>
+</html>
