@@ -132,9 +132,8 @@ private_operating_layer/
 │   └── earlyecho-watchdog.timer
 │
 └── static/
-    ├── index.html               # Client dashboard
-    ├── client_landing.html      # Client-facing landing page
-    └── accelerator_landing.html # Accelerator/investor-facing landing page
+    ├── index.html               # Dashboard
+    
 ```
 
 ---
