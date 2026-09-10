@@ -13,8 +13,8 @@ __pycache__/
 dist/
 build/
 
-# Kuzu graph databases (per-org, generated at runtime)
-kuzu_data/
+# Kuzu graph databases (per-org runtime data, must never be committed)
+graph_dbs/
 
 # Uploads (client files, not code)
 uploads/
