@@ -15,7 +15,7 @@ outside `layer/` and `tests/` is EarlyEcho's unless this file says otherwise.
 |---|---|
 | `operating_layer_main/PRD-SPEC.md` | **The specification, v3.** Defines what correct means. Parts A (PRD), B (spec), C (acceptance), D (revision log) |
 | `operating_layer_main/HANDOFF.md` | Handoff v3. Decision history, the stack, the build order, the security audit |
-| `operating_layer_main/Operating Layer.html` | A visual mock with a hand-written snapshot. Reference for **output shapes and screen structure only** — its data is not real |
+| `operating_layer_main/Operating Layer.html` | A visual mock with a hand-written snapshot. Reference for **output shapes and screen structure only**. Its data is not real: the 15 open proposals and the chain were written by hand, not generated, so they are not a route to AC-16 |
 | `PROGRESS.md` | The build plan, step status, and a technical summary per finished step |
 
 Read `CLAUDE.md` and `PROGRESS.md`, then the part of the spec the work in hand touches.
@@ -102,6 +102,24 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   is the honest state, not a defect.
 - **No auth in phases 1–3.** The surfaces are a CLI and a stdio MCP server; org context is
   an explicit argument and RLS enforces it. Real auth arrives with HTTP in phase 4.
+  Partially reversed for phase 5, which needs **attribution** — a `user` table with a role
+  and an `--as <email>` argument — to record `decided_by` and enforce the role rules. That
+  is identity, not authentication; sessions and bearer tokens stay in phase 4.
+- **Phase 5 comes before phase 4**, against the handoff's order. PRD D2: "below 50% the
+  proposals are noise and that must be known before a UI is built around them". Phase 4 adds
+  no capability (one `run(transport=...)` argument), and Dust over read-only findings is the
+  read-only dashboard handoff section 15 forbids. Phase 4 survives as a half-day spike to
+  answer open questions 1 and 2, which cannot be answered by reasoning. Full rationale in
+  `PROGRESS.md`, "Beyond phase 3".
+- **The critic scores, it never decides.** EarlyEcho's `ingestion/pipeline.py:53`
+  auto-approves at confidence >= 0.7. That must not carry over to `clause_change`,
+  `new_clause` or `ci_change` proposals: B3 rule 3 forbids auto-approving a spec edit or a
+  CI change on confidence alone, because the critic is an LLM and is itself injectable. The
+  0.7 / 0.5 thresholds are routing and display only.
+- **AC-16 cannot be gamed.** Twenty trivially-correct proposals score above the 50–85% band,
+  which B6 reads as a rubber stamp and therefore a failure. Generate what the findings
+  justify, decide all of them, report the number wherever it lands. A result outside the band
+  is a finding to report, not to tune away (EC-5).
 - **Metrics come in three tiers.** Read a named number where the source has one; compute
   it from a declarative definition over per-case rows where it does not; and where neither
   works, report `uncovered / no_metric` rather than reimplementing the customer's scorer.

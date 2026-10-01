@@ -5,8 +5,8 @@ Conventions and constraints: `CLAUDE.md`.
 
 **Scope.** Phases 1–3 of the handoff's build order: onboarding, the five finding queries,
 and the stdio MCP server. That is the whole read half, usable from a terminal with no UI,
-no agent and no Dust. Phases 4–7 (Dust as a client, the write half, the remaining sources,
-operations) come after and are unchanged from the handoff.
+no agent and no Dust. What follows phase 3 is **not** the handoff's order any more — see
+"Beyond phase 3" at the end of this file.
 
 **How to read the status column.** A step is `done` only when its tests pass and the
 result has been quoted, never when the code merely exists.
@@ -143,3 +143,122 @@ ref into an immutable URL. This is the mechanism that makes adding a source syst
 of one resolver and one adapter, with no change to the query layer, and it is what AC-14
 and AC-7 are enforced through. It lands before migration 2 because `clause` and
 `observation` store refs and should be written against a settled scheme.
+
+---
+
+# Beyond phase 3 — the order changed, and why
+
+Recorded 1 Oct 2026. The handoff's build order runs phase 4 (HTTP, a token, Dust as a
+client) before phase 5 (the write half). **That is reversed here.** The reasoning is below
+so it is not re-argued, and so that a reader who knows the handoff can see where this
+departs from it.
+
+## A retraction first
+
+Earlier advice in this project was to decide the prototype's 15 open proposals by hand
+before writing any code, on the grounds that PRD C3 item 8 calls the acceptance rate the
+top open item ahead of everything else. **Those 15 proposals are not real.** They are
+hand-written snapshot content in `Operating Layer.html`, not output from a working
+generator over real data. That route to AC-16 does not exist.
+
+The consequence is that the acceptance rate can only be measured after the write half is
+built on top of phases 1–3. It makes phase 5 more important, not less, and it is the single
+strongest argument for the reordering below.
+
+## Why phase 5 comes before phase 4
+
+The specification already says so. PRD D2: *"Below 50% the proposals are noise and that
+must be known **before a UI is built around them**. That is AC-16."*
+
+1. **Phase 4 delivers no capability.** It is a transport change plus a rented conversation
+   surface. Verified during step 1: with `mcp` 2.2.0 it is `run(transport="streamable-http")`
+   in place of `run(transport="stdio")`. Nothing in the Layer's data model or logic changes.
+2. **Phase 4 without phase 5 is the thing the handoff forbids.** Dust over read-only
+   findings is a chat window onto a dashboard, and section 15 rules out a read-only
+   dashboard explicitly: *"Braintrust and Langfuse can add views in a quarter. The
+   write-back is the moat."* Approving proposals is phase 5's output, so the surface has
+   nothing to approve until phase 5 exists.
+3. **Phase 5 has no external dependencies. Phase 4 has two unresolved ones.** Open
+   questions 1 and 2 — whether hosted Dust gates remote MCP servers by plan tier, and what
+   auth scheme its credential policy accepts — are outside this project's control and still
+   unverified.
+4. **Security order.** SEC-7 and audit item P7 (rate limiting) land with HTTP, and B3
+   rule 3 states the critic is itself an LLM and itself injectable. Exposing an endpoint
+   before the approval boundary is built and tested means the first thing on the public
+   internet is a server whose write paths are unfinished.
+
+## Phase 4 becomes a half-day spike, not a deferral
+
+Open questions 1 and 2 cannot be answered by reasoning, only by trying. At the phase-3
+boundary: put the server behind HTTP with a throwaway token, register it in hosted Dust as
+a remote MCP server, record the plan tier and the accepted auth scheme in this file, and
+stop. That de-risks phase 4 without reordering the real work.
+
+## Three things phase 5 needs that the plan does not yet carry
+
+**An actor model, which is not auth.** AC-16 records `decided_by`, and the role rules need
+enforcing: a pm decides every proposal kind, an engineer decides `ci_change` and
+`eval_case`, an agent never decides anything. That needs identity and attribution — a
+`user` table with a role, and an `--as <email>` argument on the decide commands. It does
+**not** need sessions or bearer tokens, which stay in phase 4. This is a deliberate partial
+reversal of decision D8 (no auth in phases 1–3): attribution moves forward, authentication
+does not.
+
+**The critic scores, it never decides.** EarlyEcho's `ingestion/pipeline.py:53` auto-approves
+at confidence ≥ 0.7. That must not carry over for `clause_change`, `new_clause` or
+`ci_change` proposals. B3 rule 3 is explicit: never auto-approve a spec edit or a CI change
+on confidence score alone, because the critic is an LLM and is itself injectable. The
+0.7 / 0.5 thresholds survive as routing and display only, never as approval.
+
+**Generators, which neither document specifies.** Proposals have to originate somewhere,
+and they are thin over phase 2's findings:
+
+| Finding | Proposal it justifies |
+|---|---|
+| `drift` | A threshold change **or** a ticket. US-2 forbids both in one proposal |
+| `unenforced` | A `ci_change`, opened as a pull request (US-3, US-12) |
+| `uncovered` | A `new_clause`, or a `link` where the clause exists but is unbound |
+| production failure | An `eval_case` (C1, US-1) |
+
+This is why phase 5 is cheaper than it looks once phases 1–3 exist. The expensive part is
+not generating proposals, it is the hard cases that make the write half honest: EC-6 (two
+people decide at once, first wins and the second is told by whom), H2 (a human edit to the
+spec invalidates an open proposal rather than being merged over), H7 (evidence deleted by
+retention marks the proposal evidence-expired rather than showing it as live).
+
+## What AC-16 actually asks of a person
+
+AC-16 means the product owner sitting down and deciding roughly twenty real proposals about
+their own products. Two things follow that are easy to miss.
+
+**The band cuts both ways.** Accepting 19 of 20 is ≥ 85%, which B6 reads as a rubber stamp
+rather than a success: *"A rubber stamp on changes to the definition of correctness is
+worse than no tool, because it launders an unreviewed change as an approved one."*
+Accepting 8 of 20 is below 50% and the proposals are noise.
+
+**So it cannot be gamed.** Generating twenty trivially-correct proposals produces a number
+above the band, which is a failure, not a pass. The honest procedure is to generate whatever
+the findings justify, decide every one, and record the number wherever it lands. A result
+outside 50–85% is a finding about the product and must be reported, not tuned away —
+EC-5 says exactly this: *"a product failure to report, not to hide"*.
+
+## The revised order
+
+| Stage | What it is | Gate |
+|---|---|---|
+| Phases 1–3 | As planned above: onboarding, findings, stdio MCP | Steps 1–10 of the table at the top |
+| Spike | Half a day on hosted Dust | Open questions 1 and 2 answered in writing |
+| **Phase 5** | The write half, plus the actor slice | **AC-16: a real acceptance rate from ~20 decided proposals** |
+| Decision gate | The number decides what is worth building next | Below 50%, no surface gets built around proposals |
+| **Phase 4** | A surface. **Open: whether it is Dust at all** | See below |
+| Phases 6–7 | Unchanged. Phase 6 unblocks AC-6 and the `underspecified` finding kind | |
+
+## The phase 4 question left open deliberately
+
+Whether the surface should be Dust is not yet decided, and should not be decided before
+AC-16. Handoff section 17 says the hosted product is *"that same server plus a front end on
+it, not a rebuild"*, and the prototype already has a working six-screen vanilla-JS UI plus
+the mock in `operating_layer_main/Operating Layer.html`. Dust earns its rent for the durable
+agent loop, the scheduled triggers, per-tool approval and the multiplayer surfaces — not for
+a screen. If what is wanted is a screen, the Layer's own UI is likely cheaper than the
+integration. Open question 13 is the same question asked from the other end.
