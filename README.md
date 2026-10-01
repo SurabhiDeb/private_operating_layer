@@ -20,12 +20,12 @@ plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | Clause, observation and enforcement tables |
-| All 12 tables, reversibly migrated | The spec, eval and code adapters |
-| Refs: the `kind:id` citation scheme and its resolver registry | Onboarding CLI |
-| A git source pinned to an immutable commit | The five finding queries |
-| The metric engine: reads a number, computes one, or declines | The MCP server |
-| An append-only audit log, enforced by trigger | The write half: proposals and approvals |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The spec, eval and code adapters |
+| All 12 tables, reversibly migrated | Onboarding CLI |
+| Refs: the `kind:id` citation scheme and its resolver registry | The five finding queries |
+| A git source pinned to an immutable commit | The MCP server |
+| The metric engine: reads a number, computes one, or declines | The write half: proposals and approvals |
+| An append-only audit log, enforced by trigger | |
 | 133 tests | |
 
 Nothing is usable end to end yet. The honest summary is that the foundation is in and the
