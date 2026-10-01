@@ -23,6 +23,21 @@ from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
+class SourceDocument:
+    """One thing read from a source, with where a human can open it.
+
+    The URL is supplied by the caller rather than built here, because only the caller
+    knows the source's pinned revision. That keeps an adapter free of any knowledge about
+    repositories or hosts while still letting every observation carry a citation that
+    names an immutable revision (AC-14).
+    """
+
+    identifier: str
+    content: bytes | str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class Skipped:
     """Something enumerated and deliberately not turned into a candidate."""
 
@@ -54,6 +69,12 @@ class ImportReport:
     enumerated: int = 0
     #: Units that yielded at least one candidate.
     imported: int = 0
+    #: Metrics that could not be computed, recorded per unit. Deliberately outside the
+    #: arithmetic above: the unit of enumeration is a document, and a document whose
+    #: third metric is uncomputable is still imported. Kept so onboarding can say "this
+    #: metric was unmeasurable in 47 of 47 runs" rather than leaving a clause quietly
+    #: unmeasured, which is the `uncovered / no_metric` finding's input.
+    unmeasured: list[Skipped] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     @property
