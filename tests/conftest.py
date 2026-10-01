@@ -30,7 +30,9 @@ def schema_is_current() -> None:
                 text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             ).scalars()
         )
-    missing = {"org", "product", "source", "binding"} - tables
+    from layer.db.models import TENANT_TABLES
+
+    missing = ({"org", *TENANT_TABLES}) - tables
     if missing:
         pytest.fail(
             f"database {settings.migration_url.rsplit('/', 1)[-1]} is missing "
@@ -42,6 +44,12 @@ def schema_is_current() -> None:
 def clean_tenants() -> Iterator[None]:
     yield
     with _ADMIN.begin() as conn:
+        # `audit_event` is append-only in the database, and its guard covers TRUNCATE as
+        # well as UPDATE and DELETE — TRUNCATE does not fire row triggers and would
+        # otherwise be a silent way to empty the audit log. Emptying it between tests is
+        # legitimate but has to go through the same named hatch a real tenant erasure
+        # does, so the harness cannot quietly enjoy a privilege production lacks.
+        conn.execute(text("SELECT set_config('app.erasure', 'on', true)"))
         conn.execute(text("TRUNCATE org CASCADE"))
 
 

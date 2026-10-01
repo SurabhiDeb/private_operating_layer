@@ -18,17 +18,39 @@ never named a tenant sees nothing. That makes "forgot to set the org" fail close
 `FORCE ROW LEVEL SECURITY` is applied as well as `ENABLE`, because a table's owner
 is otherwise exempt from its own policies. Without it the migration role, and
 anything that ever ran as the owner, would bypass isolation silently.
+
+**Every function here takes its tables explicitly, with no default.** These are called
+from migrations, and a migration has to describe the schema as it was when it was
+written. An earlier version defaulted to the live `TENANT_TABLES`, so when migration 2
+added eight tables, migration 1's downgrade began trying to revoke privileges on tables
+it had never created and failed with `relation "audit_event" does not exist`. The
+constant below is for application code; migrations name their own.
 """
 
 from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+from layer.db.models import TENANT_TABLES
+
 ORG_SETTING = "app.org_id"
 
-#: Tenant tables carry `org_id` and get a policy. `org` is the tenant registry and
-#: is handled separately.
-TENANT_TABLES: tuple[str, ...] = ("product", "source", "binding")
+#: The transaction-local flag that permits an erasure. Narrow by design: see
+#: `append_only_statements` and PRD EC-9 / SEC-8.
+ERASURE_SETTING = "app.erasure"
+
+__all__ = [
+    "ORG_SETTING",
+    "ERASURE_SETTING",
+    "TENANT_TABLES",
+    "app_role_from_url",
+    "enable_statements",
+    "disable_statements",
+    "grant_statements",
+    "revoke_statements",
+    "append_only_statements",
+    "drop_append_only_statements",
+]
 
 _PREDICATE = (
     f"org_id = nullif(current_setting('{ORG_SETTING}', true), '')::uuid"
@@ -47,7 +69,7 @@ def app_role_from_url(url: str) -> str:
     return user
 
 
-def enable_statements(tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+def enable_statements(tables: tuple[str, ...]) -> list[str]:
     out: list[str] = []
     for table in tables:
         out += [
@@ -59,7 +81,7 @@ def enable_statements(tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
     return out
 
 
-def disable_statements(tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+def disable_statements(tables: tuple[str, ...]) -> list[str]:
     out: list[str] = []
     for table in reversed(tables):
         out += [
@@ -70,7 +92,7 @@ def disable_statements(tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
     return out
 
 
-def grant_statements(role: str, tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+def grant_statements(role: str, tables: tuple[str, ...]) -> list[str]:
     """Privileges for the application role.
 
     The role is granted DML and never ownership, so its reads and writes pass
@@ -84,9 +106,71 @@ def grant_statements(role: str, tables: tuple[str, ...] = TENANT_TABLES) -> list
     return out
 
 
-def revoke_statements(role: str, tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+def revoke_statements(role: str, tables: tuple[str, ...]) -> list[str]:
     out = [f'REVOKE ALL ON org FROM "{role}"']
     for table in reversed(tables):
         out.append(f'REVOKE ALL ON {table} FROM "{role}"')
     out.append(f'REVOKE USAGE ON SCHEMA public FROM "{role}"')
+    return out
+
+
+# -- append-only -----------------------------------------------------------------
+
+#: Tables that may be inserted into and never changed afterwards.
+APPEND_ONLY_TABLES: tuple[str, ...] = ("audit_event",)
+
+_APPEND_ONLY_FUNCTION = f"""
+CREATE OR REPLACE FUNCTION layer_append_only() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION '% is append-only: UPDATE is never permitted', TG_TABLE_NAME;
+    END IF;
+
+    -- DELETE and TRUNCATE are permitted only under an explicit erasure. PRD EC-9 and
+    -- SEC-8 require a tenant-scoped hard delete reconciled with append-only history,
+    -- so an absolute refusal here would make the right to erasure unimplementable.
+    -- The hatch is narrow, transaction-local, and has to be asked for by name.
+    IF coalesce(current_setting('{ERASURE_SETTING}', true), '') <> 'on' THEN
+        RAISE EXCEPTION
+            '% is append-only: % requires an explicit erasure (set {ERASURE_SETTING})',
+            TG_TABLE_NAME, TG_OP;
+    END IF;
+
+    IF TG_OP = 'TRUNCATE' THEN
+        RETURN NULL;
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+
+def append_only_statements(tables: tuple[str, ...]) -> list[str]:
+    """Make a table append-only in the database rather than by convention.
+
+    Both triggers are needed. The row-level one catches UPDATE and DELETE; the
+    statement-level one catches TRUNCATE, which does not fire row triggers at all and
+    would otherwise be a silent way to empty the audit log.
+    """
+    out = [_APPEND_ONLY_FUNCTION]
+    for table in tables:
+        out += [
+            f"CREATE TRIGGER {table}_append_only_rows "
+            f"BEFORE UPDATE OR DELETE ON {table} "
+            f"FOR EACH ROW EXECUTE FUNCTION layer_append_only()",
+            f"CREATE TRIGGER {table}_append_only_truncate "
+            f"BEFORE TRUNCATE ON {table} "
+            f"FOR EACH STATEMENT EXECUTE FUNCTION layer_append_only()",
+        ]
+    return out
+
+
+def drop_append_only_statements(tables: tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    for table in reversed(tables):
+        out += [
+            f"DROP TRIGGER IF EXISTS {table}_append_only_truncate ON {table}",
+            f"DROP TRIGGER IF EXISTS {table}_append_only_rows ON {table}",
+        ]
+    out.append("DROP FUNCTION IF EXISTS layer_append_only()")
     return out
