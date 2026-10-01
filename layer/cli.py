@@ -20,6 +20,7 @@ from sqlalchemy import select
 from layer.core.db import org_session, unscoped_session
 from layer.core.errors import LayerError
 from layer.db.models import Org, Product
+from layer.findings import queries
 from layer.onboarding import bindings as binding_gate
 from layer.onboarding import run, state
 
@@ -160,6 +161,40 @@ def _measure(args) -> int:
     return 0
 
 
+def _findings(args) -> int:
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product)
+        found = queries.find_all(session, product=product)
+
+        wanted = [args.kind] if args.kind else list(found)
+        for kind in wanted:
+            result = found.get(kind)
+            if result is None:
+                print(f"no such finding kind: {kind}")
+                continue
+            if result.refusal is not None:
+                # A refusal is printed as prominently as a finding. An empty section would
+                # read as "nothing to see here", which is the one thing it does not mean.
+                print(f"\n{kind}: cannot answer")
+                print(f"  {result.refusal.reason}")
+                for missing in result.refusal.missing:
+                    print(f"  needs: {missing}")
+                continue
+
+            print(f"\n{kind}: {len(result)} finding(s)")
+            for finding in result.findings:
+                marker = "now" if finding.current else "historical"
+                print(f"  [{finding.clause_ref or '-'}] {marker}")
+                print(f"    {finding.summary}")
+                if args.citations:
+                    for link in finding.evidence_links:
+                        print(f"      {link['id']:34} {link['url']}")
+                if finding.unresolved:
+                    # Displayed, never hidden (PRD B1).
+                    print(f"      UNRESOLVED: {', '.join(finding.unresolved)}")
+    return 0
+
+
 def _status(args) -> int:
     with org_session(args.org) as session:
         product = state.get(session, key=args.product)
@@ -244,6 +279,14 @@ def _parser() -> argparse.ArgumentParser:
         p.set_defaults(handler=lambda a, d=decision: _bindings_decide(a, d))
 
     with_common(sub.add_parser("measure", help="step 6: verdicts")).set_defaults(handler=_measure)
+
+    findings = with_common(sub.add_parser("findings", help="step 7: what the record says"))
+    findings.add_argument("--kind", choices=[
+        "drift", "unenforced", "uncovered", "stalled_decision", "underspecified",
+    ])
+    findings.add_argument("--citations", action="store_true",
+                          help="print the resolved url for every piece of evidence")
+    findings.set_defaults(handler=_findings)
     with_common(sub.add_parser("status")).set_defaults(handler=_status)
     return parser
 
