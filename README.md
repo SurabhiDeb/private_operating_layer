@@ -20,13 +20,12 @@ plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | The spec, eval and code adapters |
-| All 12 tables, reversibly migrated | Onboarding CLI |
-| Refs: the `kind:id` citation scheme and its resolver registry | The five finding queries |
-| A git source pinned to an immutable commit | The MCP server |
-| The metric engine: reads a number, computes one, or declines | The write half: proposals and approvals |
-| An append-only audit log, enforced by trigger | |
-| An append-only audit log, enforced by trigger | |
+| Multi-tenant schema with provable isolation (Postgres row level security) | Onboarding: the seven-step state machine and its CLI |
+| All 12 tables, reversibly migrated, with an append-only audit log | The five finding queries |
+| Refs: the `kind:id` citation scheme and its resolver registry | The MCP server |
+| A git source pinned to an immutable commit | The write half: proposals and approvals |
+| The metric engine: reads a number, computes one, or declines to | |
+| Spec, eval and code adapters, with Langfuse as a second transport | |
 | 242 tests | |
 
 Nothing is usable end to end yet. The honest summary is that the foundation is in and the
