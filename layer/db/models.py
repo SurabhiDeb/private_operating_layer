@@ -170,6 +170,9 @@ class Binding(Base):
         UniqueConstraint(
             "org_id", "product_id", "metric", "clause_ref", name="uq_binding_metric_clause"
         ),
+        CheckConstraint(
+            "decision IN ('confirmed', 'rejected')", name="ck_binding_decision"
+        ),
         Index("ix_binding_product", "org_id", "product_id"),
     )
 
@@ -185,6 +188,13 @@ class Binding(Base):
     metric: Mapped[str] = mapped_column(String(128), nullable=False)
     clause_ref: Mapped[str] = mapped_column(String(64), nullable=False)
     metric_definition: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: `rejected` is as much a decision as `confirmed`, and it has to be storable for two
+    #: reasons. Onboarding step 5 completes only when every candidate has been "confirmed
+    #: or rejected", so without this the product can never leave the gate; and a candidate
+    #: a human has already declined must not be proposed again next import, which would
+    #: turn review into a treadmill.
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmed_by: Mapped[str] = mapped_column(String(255), nullable=False)
     confirmed_at: Mapped[datetime] = _ts()
 

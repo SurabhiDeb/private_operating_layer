@@ -31,7 +31,14 @@ class Base(DeclarativeBase):
 
 
 engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
-SessionFactory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+# Autoflush is left on, which is SQLAlchemy's default and here a correctness
+# requirement rather than a preference. Onboarding writes and then reads back inside one
+# transaction — it computes verdicts by mutating clause rows, then counts them; it records a
+# binding, then asks whether any remain undecided. With autoflush off those reads returned
+# the pre-write rows, so a product sat at the gate with nothing left to decide and every
+# clause reported the verdict it was created with. Both looked like logic bugs and were
+# stale reads.
+SessionFactory = sessionmaker(bind=engine, autoflush=True, expire_on_commit=False)
 
 
 def _as_uuid(org_id: uuid.UUID | str) -> uuid.UUID:
