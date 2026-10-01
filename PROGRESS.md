@@ -24,27 +24,28 @@ searching for it.
 | 5 | The metric engine, tiers 1 to 3 | **done** |
 | 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **done** |
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | **done** |
-| 8 | The five finding queries; reproduce all three C1 conditions | next |
-| 9 | The stdio MCP server | not started |
+| 8 | The five finding queries; reproduce all three C1 conditions | **done** |
+| 9 | The stdio MCP server | next |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
 **Coverage, taken from the test markers rather than from prose.**
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-4, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21 |
-| Hard cases | H1, H3, H5, H6, H11, H14, H15 |
+| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21 |
+| Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
 | User stories | **none yet.** AC-11 asks for a test per US-1 to US-12 criterion and the `story` marker is unused. Step 10's job |
 
-AC-4 and AC-15 hold at the adapter; their finding queries arrive in step 8. AC-14 holds as a
-mechanism — a branch URL cannot escape the registry — and is re-asserted per finding in step 8,
-when real findings carry real evidence.
+**AC-3, AC-4 and AC-5 are the demo, and they pass.** PRD C2 requires them to do so "with no
+UI and no agent, from committed data alone, and against at least two independently onboarded
+products" — both reference products are onboarded from their own sources in
+`tests/test_findings.py`.
 
-Still outstanding: AC-3, AC-5, AC-6 (step 8, and AC-6 needs phase 6's sources), AC-7, AC-10 to
+Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10 to
 AC-12 (step 10), AC-16 (phase 5).
 
-**Tests:** 290 passing. **Commits:** 19 on `layer-phase-1-3`. **Migrations:** 4.
+**Tests:** 312 passing. **Commits:** 21 on `layer-phase-1-3`. **Migrations:** 4.
 
 ---
 
@@ -928,26 +929,126 @@ is written in a different idiom. Nothing about any of them appears anywhere in `
 
 ---
 
+## Step 8 — The five findings. Done.
+
+**What it had to achieve.** Turn the stored record into the conditions a reader cares about,
+with citations that open, and no sentence that states a cause. This is the milestone the whole
+build is pointed at.
+
+**Files.** Commit `3cb5d6f`.
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/findings/shapes.py` | added | `Finding` exactly as PRD B1 defines it, and `FindingSet`, which carries either findings or a refusal. A refusal rather than an empty list, because an empty list from a query that cannot run reads as "all clear" — the most expensive wrong answer available |
+| `layer/findings/citations.py` | added | The database-backed resolvers: an observation resolves to the run it came from, a clause to the **lines** that stated it. Built per product and per request, never shared, because refs are not globally unique (H11) |
+| `layer/findings/queries.py` | added | The five queries, the summaries, and `find_all`. No metric name and no product name appears in any of them |
+| `layer/cli.py` | modified | A `findings` command, with `--kind` and `--citations`. A refusal prints as prominently as a finding, because an empty section would read as "nothing to see here" |
+| `tests/test_findings.py` | added | 22 tests. Both reference products onboarded from their own sources, with every number asserted against what can be counted by hand in the committed files |
+
+### Condition 1, reproduced from committed data
+
+Given a product and nothing else — no metric, no run, no hint:
+
+```
+TRI-11.2 Escalation recall >= 99% was missed in 7 of 47 runs, worst 80% (4 of 5) in run
+20260915-133223Z-v2. The latest run, 20260915-150650Z-v2, is at 100%, so a check on the
+latest run alone shows nothing. Failing case ids across these runs: 14. Breaching runs
+record ca6d836-dirty. Runs at 98380d1, baf3df2-dirty, f05a88a-dirty do not breach.
+```
+
+Alongside it, from the enforcement scan:
+
+```
+TRI-11.1 Overall team accuracy states >= 85% and is checked in products/triage/gate.py,
+but only against the newest run. A breach in any earlier run of the same prompt is never
+seen.
+```
+
+Every citation in both resolves to a pinned commit, and a clause citation lands on the line
+of `SPEC.md` that stated the bar rather than on the file.
+
+The final sentence of the drift summary is the one that does the work. It states what a
+narrower check can see, which is a fact about the check rather than a claim about the product.
+
+### Condition 2, and a structural finding nobody arranged for
+
+`critical_pass_rate` misses its 100% bar in **7 of 7** runs, worst 0.4545, and still holds,
+while `status_ok` climbs 0.74 to 0.94. Both are reported: a reader sees that the metric
+improving is not the metric that matters.
+
+The policy product then demonstrated **H16** without the fixture being arranged to. Its
+specification states a bar for the critical subset and **none at all for the headline**, so
+`status_ok` is reported as a measurement no clause promises — where, as H16 puts it, "the gap
+is the absent clause, not the metric". It also means that product cannot leave the binding
+gate on name matching alone: a human has to pair `critical_pass_rate` with the clause that
+names the subset differently, which is exactly what step 5 is for.
+
+### Drift compares the number; the verdict compares the interval
+
+The distinction that matters most here, and it is deliberate.
+
+| | Question | Answer for TRI-11.2 |
+|---|---|---|
+| Drift | Did a run come in under the bar? | Yes, in 7 of 47 |
+| Verdict | Can we say the product meets its bar right now? | `cannot_confirm` — seven of seven cannot establish a 99% rate |
+
+Both are true. B6 sets drift detection at 100% precisely because it is deterministic — a
+number was written down — while a verdict is a claim about evidence. Collapsing them would
+lose one of them, and which one got lost would depend on the day.
+
+### Two things the tests forced
+
+**Resolution is no longer the caller's job.** Only `find_all` resolved citations, so a query
+used on its own returned findings whose `evidence_links` were empty *and whose `unresolved`
+was empty too* — which reads as "every citation resolved" when none had been tried. That is
+AC-7 and AC-14 broken by omission rather than by a wrong URL, which is the harder kind to
+notice. Every query now resolves before returning, and `find_all` shares one registry because
+building it opens the repository.
+
+**A rejected pairing is not a coverage gap.** A human looked and said this number does not
+answer that promise; surfacing it as `uncovered` would re-open a closed question and make
+review a treadmill.
+
+### What refuses, and why that is the right answer
+
+`find_stalled_decisions` and `find_underspecified` cannot run in this phase and say so by
+name, each listing the source it lacks. H8 — the eval passes while production sits outside its
+band — is the highest-value finding in the specification, and answering it empty would be a
+claim about production readings the Layer has never seen.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+........................                                                 [100%]
+312 passed in 40.73s
+```
+
+The no-causal-language test greps every generated summary and refusal across both products
+for twelve causal constructions — `because`, `caused`, `due to`, `led to`, `resulted in`,
+`attributable` among them — and requires none. It asserts against generated text rather than
+intent, because B3 rule 6 is about what a reader is told.
+
+---
+
 ## Next
 
-Step 8, the five finding queries. This is the milestone: the two real breaches stop being
-numbers in a test and become findings with citations.
+Step 9, the stdio MCP server. The five queries plus `list_clauses`, `get_clause`,
+`trace_chain`, `metric_history` and `record_observation`, wrapped as tools and driven from a
+terminal — which is PRD A6's bar: "the Layer is fully usable over stdio from a terminal with
+no Dust at all, and every acceptance criterion in Part C must pass that way".
 
-Plain SQL over `clause × binding × observation × enforcement_fact × link`, with no metric name
-and no product name in any query. Each returns the B1 Finding shape with `evidence`,
-`evidence_links` and `unresolved`, resolved through the per-product registry built in step 3.
+`mcp` 2.2.0 is already installed and its surface verified in step 1: `MCPServer` from
+`mcp.server.mcpserver`, tools via a `@server.tool()` decorator, transport an argument to
+`run()`. `accept_proposal` and `reject_proposal` are never exposed, in any phase.
 
-- `find_drift` — any observation in the **full** sequence violating its clause, with worst,
-  runs_missed and runs_total, and the latest value reported separately. Condition 1 surfaces
-  here: 7 of 47 runs breaching while the newest is clean
-- `find_unenforced` — a clause metric with no `enforcement_fact`, **or** one whose fact has a
-  narrowed scope, reported as `enforced: true, scope: latest_only` (AC-15, H14)
-- `find_uncovered` — `no_assertion | no_metric | metric_without_clause | not_measured_recently`.
-  The gate already surfaces the first and third as lists; this turns them into findings
-- `find_stalled_decisions`, `find_underspecified` — explicit refusals naming the missing
-  `decision` and `production` sources, so AC-20's behaviour holds rather than returning empty
+`trace_chain` is the one piece of new query work — a recursive CTE over `link`. It will return
+mostly gaps until phase 6 binds the sources that fill the chain, and naming each gap is the
+required behaviour rather than a shortfall (US-5: "where a link in the expected chain is
+absent, the Layer shall name the gap rather than omitting it").
 
-Plus the no-causal-language test over every generated summary.
+Then step 10: the agnosticism grep test, and the AC matrix that closes AC-10 to AC-12 —
+including the user-story tests that nothing covers yet.
 
 ---
 

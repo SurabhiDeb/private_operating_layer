@@ -15,25 +15,28 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phase 1 of 3 — steps 7 of 10 done. Onboarding works end to end.** See [`PROGRESS.md`](PROGRESS.md) for the
+**Phase 1 of 3 — steps 8 of 10 done. Onboarding and the findings both work.** See [`PROGRESS.md`](PROGRESS.md) for the
 plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | The five finding queries |
-| All 12 tables, reversibly migrated, with an append-only audit log | The MCP server |
-| Refs: the `kind:id` citation scheme and its resolver registry | The write half: proposals and approvals |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The MCP server |
+| All 12 tables, reversibly migrated, with an append-only audit log | The write half: proposals and approvals |
+| Refs: the `kind:id` citation scheme and its resolver registry | `trace_chain`, and the sources that fill a chain |
 | A git source pinned to an immutable commit | |
 | The metric engine: reads a number, computes one, or declines to | |
 | Spec, eval and code adapters, with Langfuse as a second transport | |
-| **Onboarding: all seven steps, with the binding gate** | |
-| **Verdicts, via a Wilson interval** | |
+| Onboarding: all seven steps, with the binding gate | |
+| Verdicts, via a Wilson interval | |
+| **Three of the five findings, with resolvable citations** | |
 | **A CLI: `python -m layer`** | |
-| 290 tests | |
+| 312 tests | |
 
-A product can now be onboarded end to end: registered, bound to its own spec and eval
-sources, imported, backfilled, paired against its promises by a human, and measured. What it
-cannot yet do is tell you what it found — the finding queries are next.
+A product can be onboarded end to end and interrogated. `find_drift`, `find_unenforced` and
+`find_uncovered` reproduce real breaches from committed data, with every citation resolving to
+a pinned commit. `find_stalled_decisions` and `find_underspecified` refuse by name until their
+sources exist, which is the designed behaviour rather than a gap. What is missing is the MCP
+server, so today the way in is the CLI.
 
 ---
 
@@ -138,6 +141,9 @@ cp .env.example .env     # then fill in the two database URLs
 #   ... confirm or reject each candidate, then:
 .venv/bin/python -m layer measure  --org <id> --as you@example.com triage
 .venv/bin/python -m layer status   --org <id> --as you@example.com triage
+
+# 7. What the record says.
+.venv/bin/python -m layer findings --org <id> --as you@example.com triage --citations
 ```
 
 The MCP server arrives at step 9 and does not exist yet; `PROGRESS.md` tracks it.
