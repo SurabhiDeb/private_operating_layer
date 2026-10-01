@@ -159,11 +159,50 @@ decision rather than an accident.
 **What it had to achieve.** A citation scheme that survives the systems it points at, and a
 guarantee that every citation names an immutable revision (AC-14).
 
-**Why a URN and not a URL.** Storing a URL means storing a guess about how that system will
-look later: its host, its revision scheme, its path layout. Storing identity and deriving
-the URL at read time is what makes adding a source system one resolver with no change to the
-query layer. Refs are scoped to an org and never globally unique (H11), so resolution always
-happens inside a tenant context.
+**What is stored, and what a reader sees.** The database stores the URN only. The URL is
+built at read time by the resolver registered for that kind.
+
+```
+stored in the record        file:products/triage/gate.py#L25
+                            clause:TRI-11.2
+                            obs:102
+
+returned to a reader        https://github.com/<org>/<repo>/blob/ef07ac9b4daf.../products/triage/gate.py#L25
+```
+
+The finding carries both, so nobody is ever handed a URN on its own:
+
+```json
+"evidence":       ["file:products/triage/gate.py#L25"],
+"evidence_links": [{"id": "file:products/triage/gate.py#L25", "url": "https://.../blob/ef07ac9b4daf.../gate.py#L25"}],
+"unresolved":     []
+```
+
+**Why a URN and not a URL.** Three reasons, in order of how much they cost to get wrong.
+
+*Portability.* A URL embeds a host, a revision scheme and a path layout — three guesses about
+how someone else's system will look later. Moving a repository to GitLab, or changing the
+revision a source is pinned to, is then a rewrite of every row that cited it. With a URN it is
+one resolver and nothing else, which is also what makes adding a source system cheap enough
+that the agnosticism claim survives contact with a second customer.
+
+*Honesty.* A resolver can **decline**: the file does not exist at that revision, the sha is
+`-dirty` and nobody else can obtain that tree, no resolver is registered for the kind at all.
+The ref then lands in the finding's `unresolved[]` and is displayed, which is what PRD B1
+requires — "empty is the required state; a non-empty list is displayed, never hidden". A
+stored URL cannot tell anyone it has stopped working; it just 404s for the reader, which is
+the failure B5 item 3 and B6's citation-resolvability bar exist to prevent.
+
+*Enforcement in one place.* Because every URL passes through `Registry.resolve`, AC-14's
+"citations pin an immutable revision" is checked centrally. A resolver added later cannot
+reintroduce a `blob/main/` citation without a test failing. Were URLs stored at write time,
+that check would have to be repeated at every write site and would eventually be missed at one.
+
+**The consequence worth knowing.** Rendering a finding needs the source row, because that is
+where `pinned_rev` and the URL template live, so a finding can only be resolved inside a
+tenant context. That is intentional rather than awkward: refs are scoped to an org and never
+globally unique (H11), and the same property is what stops one tenant's repository answering
+another tenant's ref.
 
 **What was built.** `layer/refs/ref.py`, `layer/refs/registry.py`,
 `layer/adapters/repo.py`, `tests/test_refs.py`, `tests/test_repo_source.py`.
