@@ -19,8 +19,8 @@ and how it was verified.
 | 2 | Migration 1: `org`, `product`, `source`, `binding`, RLS, roles, isolation tests | **done** |
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
-| 5 | The metric engine, tiers 1 to 3 | next |
-| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | not started |
+| 5 | The metric engine, tiers 1 to 3 | **done** |
+| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | next |
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | not started |
 | 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
 | 9 | The stdio MCP server | not started |
@@ -29,7 +29,7 @@ and how it was verified.
 **Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
 re-asserted per finding at step 8), AC-19 (isolation half). Partial: AC-2 (enumeration and
 idempotency; reconciliation at step 6). **Hard cases:** H3, H5, H11, H14, H15.
-**Edge cases:** EC-9. **Tests:** 77 passing. **Commits:** 8 on `layer-phase-1-3`.
+**Edge cases:** EC-4 (engine half), EC-9. **Tests:** 133 passing. **Commits:** 10 on `layer-phase-1-3`.
 
 ---
 
@@ -350,26 +350,128 @@ leak into the next transaction on a pooled connection, `enforced: true` with
 
 ---
 
+## Step 5 — The metric engine. Done.
+
+**What it had to achieve.** Turn a document the Layer has never seen into a measured
+number, for any product, without learning anything about that product.
+
+**Why this is the crux.** Neither specification says how a number is obtained, and the
+fixtures show why that gap matters: their committed run files contain **no metric values at
+all**. Every headline number is derived by iterating per-case rows, and one product's come
+from a module carrying a hardcoded article blacklist and rank semantics. A Layer that
+computed those itself would be reimplementing each customer's scorer, which is building the
+eval half — the thing handoff section 4 forbids outright.
+
+**What was built.** `layer/metrics/pointer.py`, `predicates.py`, `engine.py`, and
+`tests/test_metrics.py`, 56 tests.
+
+**How it was built — three tiers, where the third is a refusal.**
+
+*Tier 1, the source names a number.* `read` resolves an RFC 6901 JSON pointer, with an
+optional `scale` so seconds become milliseconds without code. `ratio_of` takes a
+passed/total pair at two pointers and is worth its own aggregation rather than being folded
+into `read`, because carrying n is what lets the verdict rule say anything at all.
+
+*Tier 2, per-case rows plus a declarative definition.* `rate`, `accuracy`, `recall`,
+`precision`, `count`, `mean` and `percentile`, each with an optional `filter` that selects a
+subset first. The filter is what makes "the critical cases" expressible without the engine
+ever learning what critical means.
+
+*Tier 3, neither works.* Mean reciprocal rank, recall@k with rank semantics, bespoke
+exposure rules. `compute` returns `Unmeasurable(reason="no_metric")`, the clause is reported
+as `uncovered` and its verdict is `not_measured`. `supports()` lets onboarding ask before a
+binding is confirmed, so a human is told "nothing connected measures this" rather than
+discovering it later. **That refusal is the line that stops this file growing a scorer per
+customer**, and it is phrased in the specification's own vocabulary so it surfaces as a
+finding rather than an error in a log.
+
+**Nothing evaluates a string as code.** A definition arrives in `source.config`, which is
+tenant-supplied. PRD B3 rule 2 and SEC-4 require ingested text to be data and never an
+instruction, so a predicate is a tree of dicts over a closed operator set — `all`, `any`,
+`not`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`, `is_true`, `is_false`, `is_present`,
+`is_blank`, `contains_any`. It is readable by a human reviewing a binding and incapable of
+doing anything but answering true or false about one row. An unknown operator is refused
+rather than interpreted, which is asserted by a test that feeds it an `__import__` string.
+
+**Where the engine declines rather than returning a number.** Each of these is a deliberate
+choice against a plausible wrong answer:
+
+| Situation | Why not a number |
+|---|---|
+| A filter matches no rows | Reporting zero would assert a failure that was never observed |
+| `recall` where no case is relevant | 0.0 would read as total failure of something the run never exercised |
+| `total` is zero | There is nothing to measure; a rate would be invented |
+| A pointer resolves to nothing | The source does not carry this metric, which is a finding, not a default |
+| The document lacks the rows promised | One unreadable run must not abort a backfill of ninety (EC-4) |
+
+A percentile or a mean carries no `passed`/`total` at all, so a clause measured that way can
+only ever reach `cannot_confirm`. That is correct rather than a limitation: a p95 from eleven
+requests is not evidence about a latency promise.
+
+**Two details that only real data would have revealed.**
+
+`to_bool` is strict and separate from `truthy`. A bare `bool("false")` is `True`, and in the
+reference fixture `escalate` is a JSON boolean while `labelled_escalate` is the string
+`"true"` — the product's own gate relies on that asymmetry. Comparing them uncoerced reports
+every case as a mismatch; coercing with Python truthiness inverts the metric instead. So a
+definition declares `coerce: {field: bool}`, and an unrecognised string raises rather than
+being guessed at.
+
+**A design fix found by a test.** `is_falsy` was doing two jobs and broke on a real field.
+`problem` holds an error message, and asking whether `"bad json"` is true has no answer. Split
+into `is_true`/`is_false`, which interpret a field encoding a boolean and refuse anything
+else, and `is_present`/`is_blank`, which ask only whether there is content. The distinction
+then mattered a second time within the hour: policydesk's `critical` holds a case label —
+`'C1'`, `'C3'`, or an empty string — so its subset filter is `is_present`. One operator
+covering both would have silently produced a `bad_definition` for the metric that condition 2
+turns on.
+
+**Validation against the fixtures' own published numbers.** From definitions a human would
+write at onboarding, with no product knowledge in the engine:
+
+| Metric | Engine | The handoff's table |
+|---|---|---|
+| v6 `status_ok` | 47/50 = 94.0% | 94.0% |
+| v6 `critical_pass_rate` | 10/11 = 90.91% | 90.9% |
+| v1 groundedness sidecar | 29/35, read not recomputed | — |
+
+The mid-sequence triage run is confirmed to breach its 99% bar and to name the case it
+missed, which is the number a latest-only gate never sees. `v1.json`, the file that is not a
+run, declines with `bad_definition` rather than crashing — step 6 must now tell that apart
+from a run that failed to import.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+.............................................................            [100%]
+133 passed in 4.99s
+```
+
+---
+
 ## Next
 
-Step 5, the metric engine. The one piece neither document specifies and the crux of product
-agnosticism, because the fixture run files contain **no metric values at all** — every
-headline number is derived by iterating per-case rows, and policydesk's come from a module
-carrying a hardcoded banned-article dictionary and rank semantics.
+Step 6, the adapters. Three of them, in order:
 
-Three tiers, where the third is a refusal:
+**Spec.** A deterministic structural pass over markdown — headings into sections, tables into
+rows, prose lines carrying a comparator, with line ranges kept so a citation points at lines
+rather than a file — then an LLM pass per section emitting clause candidates with metric,
+comparator, value, value_high, unit and kind. Per-section failure isolation satisfies EC-2:
+name the section that failed and import the rest. Stable refs come from `clause_identity`,
+matched on metric name, then identity key, then pgvector similarity, and only then treated as
+new (AC-1, H3).
 
-1. **The source names a number.** A run-level meta field, a committed sidecar carrying a
-   pass/total pair, a Langfuse score, a CSV column. Read at a configured JSON pointer, with
-   no product knowledge at all.
-2. **Per-case rows plus a declarative definition** in `source.config`: `rate`, `accuracy`,
-   `recall`, `precision`, `pass_rate`, `mean`, `percentile`, each with an optional row filter
-   and value coercion. This covers every bar-carrying metric in both fixtures, including the
-   subset metric that condition 2 turns on.
-3. **Neither works, so the Layer says so.** MRR, recall@k with rank semantics, bespoke
-   exposure rules. Reported as `uncovered / no_metric` with the clause `not_measured`.
-   Computing these would mean reimplementing each customer's scorer, which is building the
-   eval half — the thing handoff section 4 forbids outright.
+**Eval.** Run files first, then Langfuse. This is where AC-2's reconciliation is earned: all
+48 candidate files enumerated, 47 classified as run records, one classified as not-a-run, and
+**zero silently skipped**. The count of source runs against stored observations is the proof,
+and it only means something if "not a run" and "failed to import" are counted separately.
+
+**Code.** The enforcement scan, which produces `enforcement_fact` rows. It looks for a
+threshold comparison and, separately, for how the run set was chosen — a `[-1]`, a
+`sorted(...)[-1]`, a "latest" selector — and records `scope: latest_only`. That is what turns
+condition 1 from invisible into a finding. Conservative by design: anything it cannot read
+confidently becomes `partial` with a note rather than a guess.
 
 ---
 

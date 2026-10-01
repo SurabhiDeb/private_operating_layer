@@ -15,18 +15,18 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phase 1 of 3 in progress — steps 4 of 10 done.** See [`PROGRESS.md`](PROGRESS.md) for the
+**Phase 1 of 3 in progress — steps 5 of 10 done.** See [`PROGRESS.md`](PROGRESS.md) for the
 plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
 |---|---|
 | Multi-tenant schema with provable isolation (Postgres row level security) | Clause, observation and enforcement tables |
-| All 12 tables, reversibly migrated | The metric engine |
-| Refs: the `kind:id` citation scheme and its resolver registry | The spec, eval and code adapters |
-| A git source pinned to an immutable commit | Onboarding CLI |
-| An append-only audit log, enforced by trigger | The five finding queries |
-| 77 tests | The MCP server |
-| | The write half: proposals and approvals |
+| All 12 tables, reversibly migrated | The spec, eval and code adapters |
+| Refs: the `kind:id` citation scheme and its resolver registry | Onboarding CLI |
+| A git source pinned to an immutable commit | The five finding queries |
+| The metric engine: reads a number, computes one, or declines | The MCP server |
+| An append-only audit log, enforced by trigger | The write half: proposals and approvals |
+| 133 tests | |
 
 Nothing is usable end to end yet. The honest summary is that the foundation is in and the
 adapters are next.
