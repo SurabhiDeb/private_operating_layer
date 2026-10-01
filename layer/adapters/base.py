@@ -157,6 +157,24 @@ class ObservationCandidate:
 
 
 @dataclass(frozen=True)
+class Expectation:
+    """A stated bar the code adapter goes looking for.
+
+    The scan is told what to look for rather than left to comprehend arbitrary code. That
+    is the difference between a tool that works on one repository and one that works on
+    any: understanding a gate script in general is a research problem, while answering "is
+    0.85 compared against something called team accuracy anywhere in CI" is a search.
+    """
+
+    metric: str
+    comparator: str | None = None
+    value: float | None = None
+    value_high: float | None = None
+    unit: str | None = None
+    label: str | None = None
+
+
+@dataclass(frozen=True)
 class EnforcementCandidate:
     """What a CI file actually checks, including the run set it checks it against."""
 

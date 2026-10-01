@@ -201,7 +201,11 @@ CLAUSE_STATES = ("provisional", "measured", "ratified")
 CLAUSE_VERDICTS = ("met", "missed", "cannot_confirm", "not_applicable", "not_measured")
 COMPARATORS = (">=", "<=", "==", "between")
 SOURCE_KINDS_OF_OBSERVATION = ("eval", "production")
-ENFORCEMENT_SCOPES = ("all_runs", "latest_only", "latest_shipped")
+#: `undetermined` is the honest fourth state and it earns its place the same way
+#: `cannot_confirm` does for a verdict. A static scan that cannot tell which run set a
+#: gate checks must not pick a side: claiming `all_runs` asserts full coverage and hides a
+#: real gap, while claiming `latest_only` manufactures a finding that may not exist.
+ENFORCEMENT_SCOPES = ("all_runs", "latest_only", "latest_shipped", "undetermined")
 PROPOSAL_STATES = ("open", "accepted", "rejected")
 ROW_STATUSES = ("active", "superseded")
 
