@@ -15,7 +15,7 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phase 1 of 3 in progress — steps 5 of 10 done.** See [`PROGRESS.md`](PROGRESS.md) for the
+**Phase 1 of 3 in progress — steps 6 of 10 done.** See [`PROGRESS.md`](PROGRESS.md) for the
 plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
@@ -26,7 +26,8 @@ plan, what is finished, and a technical summary of each step.
 | A git source pinned to an immutable commit | The MCP server |
 | The metric engine: reads a number, computes one, or declines | The write half: proposals and approvals |
 | An append-only audit log, enforced by trigger | |
-| 133 tests | |
+| An append-only audit log, enforced by trigger | |
+| 242 tests | |
 
 Nothing is usable end to end yet. The honest summary is that the foundation is in and the
 adapters are next.

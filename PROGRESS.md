@@ -20,8 +20,8 @@ and how it was verified.
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
 | 5 | The metric engine, tiers 1 to 3 | **done** |
-| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **in progress** — 6a spec and 6b eval done, 6c code next |
-| 7 | The onboarding state machine and CLI; onboard all three fixtures | not started |
+| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **done** |
+| 7 | The onboarding state machine and CLI; onboard all three fixtures | next |
 | 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
@@ -29,9 +29,10 @@ and how it was verified.
 **Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
 re-asserted per finding at step 8), AC-19 (isolation half). AC-18 and AC-21 (spec import half).
 **AC-2 (reconciliation proven
-against the committed history).** Partial: AC-1 (identity keys emitted; resolution in
-step 7). **Hard cases:** H1, H3, H5, H6, H11, H14, H15.
-**Edge cases:** EC-2, EC-4, EC-9. **Tests:** 207 passing. **Commits:** 14 on `layer-phase-1-3`.
+against the committed history), AC-4 and AC-15 (adapter half; the queries in step 8).**
+Partial: AC-1 (identity keys emitted; resolution in step 7).
+**Hard cases:** H1, H3, H5, H6, H11, H14, H15.
+**Edge cases:** EC-2, EC-4, EC-9. **Tests:** 242 passing. **Commits:** 16 on `layer-phase-1-3`. **Migrations:** 3.
 
 ---
 
@@ -491,9 +492,9 @@ $ .venv/bin/python -m pytest
 
 ---
 
-## Step 6 — The adapters. In progress.
+## Step 6 — The adapters. Done.
 
-Three adapters, built and verified in order. **6a is done; 6b and 6c are next.**
+Three adapters, built and verified in order. All three done.
 
 ### 6a — The spec adapter. Done.
 
@@ -676,19 +677,107 @@ $ .venv/bin/python -m pytest
 207 passed in 8.85s
 ```
 
-### 6c — The code adapter. After 6b.
+### 6c — The code adapter. Done.
 
-The enforcement scan, producing `enforcement_fact` rows. It looks for a threshold comparison
-and, separately, for how the run set was chosen — a `[-1]`, a `sorted(...)[-1]`, a "latest"
-selector — and records `scope: latest_only`. That is what turns condition 1 from invisible
-into a finding. Conservative by design: anything it cannot read confidently becomes `partial`
-with a note rather than a guess.
+**What it had to achieve.** Record what CI actually checks, as distinct from what the
+specification says, including the run set it checks it against.
+
+**What was built.** `layer/adapters/code/enforcement.py`, migration `a1c3e7f`, and 35 tests.
+
+**It searches for stated bars; it does not comprehend code.** The scan is given the
+product's threshold clauses and asks, for each, whether a CI file compares that number to
+something bearing that name. Understanding an arbitrary gate script in general is a research
+problem; answering "is 0.85 compared against something called team accuracy" is a search,
+and a search is what generalises to a repository nobody has seen.
+
+**Migration 3 adds a fourth scope value, `undetermined`.** It earns its place the same way
+`cannot_confirm` does for a verdict. A scan that cannot tell which run set a gate reads must
+not pick a side: `all_runs` asserts full coverage and hides exactly the gap condition 1 is
+about, while `latest_only` manufactures a finding that may not exist. The downgrade deletes
+`undetermined` rows rather than guessing values for them, since inventing an enforcement
+claim on the way down is worse than losing the row.
+
+**Against the committed gate.**
+
+| | Result |
+|---|---|
+| `team_accuracy` | `enforced: true`, `threshold: 0.85`, **`scope: latest_only`**, noting that a breach in any earlier run is never seen — H14 read out of real code |
+| `escalation_recall` | Found only by alias; value reported unread, which is accurate — the gate requires zero missed escalations and never writes a rate down |
+| `escalation_precision`, `needs_clarification_rate`, `p95_latency` | Stated in the specification, absent from CI. This is AC-4 |
+| `.github/workflows/ci.yml` | Skipped as `no_threshold_found`. It runs the gate rather than checking anything, and mistaking that for enforcement would be a false positive on every repository |
+
+### Three times the scan claimed more than it knew
+
+Each was caught by a test, and each fix narrows what the adapter is willing to assert.
+
+**Aliases were necessary, not a convenience.** The gate enforces escalation recall by
+counting `missed` escalations and requiring zero, never writing the words "escalation
+recall" anywhere. Without an alias the clause was reported as unenforced — not a
+conservative error but a **wrong finding**, which B6 puts at zero tolerance.
+`metric_aliases` lives in `source.config` and is confirmed by the same human who confirms a
+binding, because it is the same kind of assertion: this number is that promise.
+
+**The threshold fallback was guessing.** It fell back to "the first ratio between 0 and 1",
+so a metric whose gate happened to sit beside a sampling constant would be reported as
+enforced at 0.5. A fabricated threshold is worse than an unread one because it reads as
+knowledge. A number is now read from the same line as the metric's name, or confirmed in the
+neighbourhood only when it is the stated value, and otherwise reported as unread.
+
+**A bar of 0, 1 or 100 cannot be confirmed by a bare digit, even on the same line.**
+`broken = sum(1 for r in results if r["problem"])` names the metric and contains a 1;
+reading that as a threshold reported the gate as enforcing contract validity at 1.0 when the
+digit was a loop accumulator. For those values the number must sit where a threshold sits —
+beside a comparator, or alone on the right of an assignment.
+
+**Other behaviour worth recording.**
+
+- Narrowing beats iteration. A file may glob every run and then index the last one, which is
+  precisely the shape that hides a mid-sequence breach.
+- A narrowing token on something that is not a run collection says nothing about scope, so
+  `name[-1]` does not make a gate `latest_only`.
+- A check that runs and **cannot fail a build** — `continue-on-error`, `|| true`, `set +e`,
+  `xfail`, a disabled check — is recorded as `enforced: false` with `known_failing`, because
+  it looks enforced on every dashboard and is not.
+- A metric no file mentions yields **no fact at all**. Absence is the finding query's job; a
+  row saying `enforced: false` would duplicate it and overclaim, since the scan knows it
+  found nothing rather than that nothing exists.
+- No expectations supplied is reported as "enforcement was not assessed", explicitly not as
+  "CI enforces nothing".
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+........................................................................ [ 89%]
+..........................                                               [100%]
+242 passed in 9.69s
+```
 
 ---
 
 ## Next
 
-Finish step 6: the eval adapter (6b), then the code adapter (6c). Both are described above.
+Step 7, onboarding: the seven-step state machine and the CLI, where the three adapters stop
+being libraries and become the only way content enters the Layer.
+
+The parts that are new rather than assembly:
+
+**Identity resolution**, which finishes AC-1. A candidate matches an existing clause by
+metric name, then by `clause_identity`, then by pgvector similarity over the statement, and
+only then counts as new. A reworded statement bumps `version` and keeps its ref and every
+link intact (H3).
+
+**The binding gate.** `require_live(product)` in one place, so B3 rules 8 and 9 are
+structural rather than remembered. Step 5 presents candidate metric-to-clause bindings and
+**stops**. The tier-2 metric definition is confirmed alongside the binding, because it is
+itself an assertion about what the number means — and so is a `metric_alias`, which 6c added
+for the same reason.
+
+**An audit event for every write**, which is AC-9 end to end rather than at the schema level.
+
+Done means an arbitrary product with a spec file and an eval directory reaches `live` with no
+code change to the Layer, verified by onboarding all three fixtures separately — the alien
+one being the test rather than a bonus.
 
 ---
 
