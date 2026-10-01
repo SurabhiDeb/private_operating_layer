@@ -20,7 +20,7 @@ and how it was verified.
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
 | 5 | The metric engine, tiers 1 to 3 | **done** |
-| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **in progress** — 6a spec done, 6b eval next, 6c code after |
+| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **in progress** — 6a spec and 6b eval done, 6c code next |
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | not started |
 | 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
 | 9 | The stdio MCP server | not started |
@@ -28,9 +28,10 @@ and how it was verified.
 
 **Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
 re-asserted per finding at step 8), AC-19 (isolation half). AC-18 and AC-21 (spec import half).
-Partial: AC-2 (enumeration and idempotency; reconciliation in 6b). AC-1 (identity keys
-emitted; resolution in step 7). **Hard cases:** H3, H5, H6, H11, H14, H15.
-**Edge cases:** EC-2, EC-4 (engine half), EC-9. **Tests:** 173 passing. **Commits:** 12 on `layer-phase-1-3`.
+**AC-2 (reconciliation proven
+against the committed history).** Partial: AC-1 (identity keys emitted; resolution in
+step 7). **Hard cases:** H1, H3, H5, H6, H11, H14, H15.
+**Edge cases:** EC-2, EC-4, EC-9. **Tests:** 207 passing. **Commits:** 14 on `layer-phase-1-3`.
 
 ---
 
@@ -579,11 +580,101 @@ and 12 numeric thresholds with every section accounted for, no duplicate refs, a
 `3% to 8%` band kept intact. The alien spec imports on configuration alone, yielding all
 eight of its bars including the two-bar sentence, the prose band and the `£900` ceiling.
 
-### 6b — The eval adapter. Next.
+### 6b — The eval adapter. Done.
 
-Run files first, then Langfuse. This is where AC-2's reconciliation is earned: all 48
-candidate files enumerated, 47 classified as run records, `v1.json` classified as
-not-a-run, and **zero silently skipped**.
+**What it had to achieve.** Turn committed run records into observations, and earn AC-2:
+"no duplicates and **no run omitted**, proven by counting source runs against stored
+observations".
+
+**What was built.** `layer/adapters/eval/run_files.py`, `layer/adapters/eval/langfuse.py`,
+and 34 tests in `tests/test_eval_adapter.py`.
+
+**Two departures from PRD B2, both load-bearing.**
+
+*Observations are keyed by metric, not by clause.* Every candidate carries
+`clause_ref = None`; the clause-to-metric relationship lives in `binding`. B2 puts
+`clause_ref` on the observation, which taken literally means binding a metric to a second
+clause requires rewriting history, and H5 — one metric legitimately serving two clauses —
+would double every stored row. With the relationship in `binding`, H5 costs nothing and
+the idempotency key collapses to `(org, product, metric, run_url)`, which is what it
+should have been. The column stays for a source that names a clause itself, such as a
+production metric mapped directly.
+
+*A file that is not a run is not a failure.* `not_a_run_record` means the document was
+never a run of this kind; a failure means one was and did not import. **Collapsing these is
+exactly how AC-2's reconciliation comes to compare 47 against 47 and look correct while a
+run is missing.** Everything else in this adapter follows from keeping them apart.
+
+**The reconciliation itself.** Against the committed history: 48 files enumerated, 47
+imported, one classified `not_a_run_record`, zero failed, arithmetic balanced. Reading the
+same documents twice produces identical candidates, which is the precondition for the
+database refusing the duplicate — the constraint can only work if the adapter presents the
+same identity each time.
+
+**Both reference conditions reproduce, every figure checkable by hand.**
+
+| | Reproduced | Source of truth |
+|---|---|---|
+| Condition 1 | `escalation_recall` breaches 99% in **7 of 47** runs, worst **0.800 (4/5)** in run `20260915-133223Z-v2`, missing case `14`, while the newest run is at 1.0 | The prototype's drift record, arrived at independently |
+| Condition 2 | `status_ok` 0.74 → 0.84 → 0.88 → 0.88 → 0.92 → 0.92 → 0.94 while `critical_pass_rate` peaks at **0.9091** and never clears 100% | Every row matches the handoff's PolicyDesk table |
+| Condition 3 | Runs sharing a recorded `prompt_sha` and `corpus_sha` while disagreeing on score are detectable from stored provenance | H1 — and nothing attempts to say why |
+
+The last row of condition 1 is the whole product in one line: the latest run is clean, so
+anything reading only the newest file sees nothing wrong.
+
+**Other behaviour worth recording.**
+
+- A **sidecar** carrying no clock of its own — a judge's verdict written beside a run —
+  inherits the time of the run it names. One with no primary is a *failure* rather than
+  being dated now, because guessing a date fabricates history.
+- Primaries are read before sidecars regardless of arrival order, so the result does not
+  depend on how a filesystem happened to list the files.
+- The **more specific reader wins**: `*-groundedness.json` also matches `*.json`, and the
+  broader pattern winning would read a verdict as a run.
+- A run with **no usable timestamp is not stored**. An observation with no time cannot sit
+  in a series, and dating it `now` would put a two-week-old run at the end of the history
+  and invent a trend.
+- One **uncomputable metric does not lose the run**. It is recorded in `report.unmeasured`,
+  deliberately outside the document arithmetic, so onboarding can say "this metric was
+  unmeasurable in 47 of 47 runs" instead of leaving a clause quietly unmeasured. That list
+  is the input to the `uncovered / no_metric` finding.
+- A run shaped correctly that measures **nothing at all** is a failure, not a silent
+  import, since otherwise the reconciliation counts a run that contributed no history.
+- A nested revision such as `{"commit": "...", "dirty": true}` is flattened to
+  `abc1234-dirty` and kept as provenance only — it is never used to build a citation.
+
+**Langfuse, as a second transport with no measurement code.** It normalises a dataset run
+into the same `{meta, results}` document a run file already has and hands it to the same
+adapter, so a metric definition written for one works for the other unchanged. One engine,
+two transports.
+
+The API surface was **read from langfuse 4.15.4, not recalled** — the same discipline that
+caught the MCP rename. `Langfuse().api` is a `LangfuseAPI` exposing
+`datasets.get_runs(dataset_name, page, limit)`, `datasets.get_run(dataset_name, run_name)`
+returning items with `trace_id`, and `scores.get_many(..., dataset_run_id=...)` over a
+five-type discriminated union of numeric, categorical, boolean, correction and text scores.
+
+**What is not verified, and why that is confined.** No live Langfuse instance was reached,
+so pagination at scale, rate limits and exact timestamp types are untested against a real
+project. The client is injected for that reason: the normalisation is testable without a
+network, and the unverified risk sits in one seam. Pagination stops on a short page rather
+than on a reported total, because a total that disagrees with the data would either loop
+forever or truncate history, and AC-2 forbids omitting a run. Credentials exist in the
+fixture repository's `.env`, so this is verifiable whenever the user wants it — recorded as
+an open item below.
+
+A test caught `langfuse:dataset/run` matching no glob, because `*` does not cross `/` and
+the identifier mixed separators. Identifiers are path-shaped throughout now, so one
+matching rule covers every source; otherwise two sources would disagree about what a glob
+means.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+...............................................................          [100%]
+207 passed in 8.85s
+```
 
 ### 6c — The code adapter. After 6b.
 
@@ -607,6 +698,23 @@ Recorded 1 Oct 2026. The handoff's build order runs phase 4 (HTTP, a token, Dust
 client) before phase 5 (the write half). **That is reversed here.** The reasoning is below
 so it is not re-argued, and so that a reader who knows the handoff can see where this
 departs from it.
+
+## Open items created during the build
+
+1. **The Langfuse transport is unverified against a live instance.** The normalisation is
+   tested with a fake shaped like langfuse 4.15.4's real surface, and the SDK surface was
+   read rather than recalled, but pagination at scale, rate limits and timestamp types have
+   not met a real project. Credentials exist in the fixture repository's `.env`. Half an
+   hour with a live project closes this, and it should happen before the Langfuse path is
+   relied on for a product whose history matters.
+2. **An LLM pass over spec prose is designed for but not built.** The deterministic
+   importer covers tables, list items and sentences that state an obligation. A document
+   that states a bar in a way no pattern reaches will silently yield no clause for it. The
+   interface is shaped so the pass can be added above the deterministic one without moving
+   anything, and it must stay above it: EC-10 requires failing closed, which a
+   non-deterministic importer makes hard to reason about.
+
+---
 
 ## A retraction first
 
