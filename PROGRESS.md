@@ -20,16 +20,17 @@ and how it was verified.
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
 | 5 | The metric engine, tiers 1 to 3 | **done** |
-| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | next |
+| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **in progress** — 6a spec done, 6b eval next, 6c code after |
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | not started |
 | 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
 **Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
-re-asserted per finding at step 8), AC-19 (isolation half). Partial: AC-2 (enumeration and
-idempotency; reconciliation at step 6). **Hard cases:** H3, H5, H11, H14, H15.
-**Edge cases:** EC-4 (engine half), EC-9. **Tests:** 133 passing. **Commits:** 10 on `layer-phase-1-3`.
+re-asserted per finding at step 8), AC-19 (isolation half). AC-18 and AC-21 (spec import half).
+Partial: AC-2 (enumeration and idempotency; reconciliation in 6b). AC-1 (identity keys
+emitted; resolution in step 7). **Hard cases:** H3, H5, H6, H11, H14, H15.
+**Edge cases:** EC-2, EC-4 (engine half), EC-9. **Tests:** 173 passing. **Commits:** 12 on `layer-phase-1-3`.
 
 ---
 
@@ -489,28 +490,114 @@ $ .venv/bin/python -m pytest
 
 ---
 
+## Step 6 — The adapters. In progress.
+
+Three adapters, built and verified in order. **6a is done; 6b and 6c are next.**
+
+### 6a — The spec adapter. Done.
+
+**What it had to achieve.** Read a specification document into clause candidates, for a
+document the Layer has never seen, with everything product-specific in configuration.
+
+**What was built.** `layer/adapters/base.py` (the candidate and report contracts),
+`layer/adapters/parse/markdown.py`, `layer/adapters/spec/values.py`,
+`layer/adapters/spec/file_spec.py`, `tests/fixtures/alien_spec.md` and
+`tests/test_spec_adapter.py`, 40 tests.
+
+**Deterministic, with no model call.** A decision rather than a limitation. The structural
+pass covers headings, tables, list items and stated targets, and it is reproducible, free
+and testable without an API key. An LLM pass belongs **on top** of this for prose a parser
+cannot reach, never underneath it: EC-10 requires failing closed, and an importer whose
+output changes between runs makes that hard to reason about. The interface is shaped so that
+pass can be added without moving anything.
+
+**How the report keeps itself honest.** An `ImportReport`'s arithmetic must balance —
+everything enumerated is a candidate, a deliberate skip, or a failure — and an unbalanced
+report says so in its own `summary()`. This is the quiet load-bearing part, because AC-2's
+reconciliation only proves something if "this is not applicable" and "this failed to import"
+are counted separately. A quiet skip otherwise makes 47 of 47 look like success. The unit of
+enumeration is whatever the adapter walks (a section, a file), not a candidate, since one
+unit routinely yields several or none.
+
+**Where product knowledge is allowed to live.** In `source.config`: which columns carry the
+metric, the target and the rationale; how section titles map to clause kinds; which sections
+to ignore. The defaults are generic English words and are overridable precisely because a
+stranger's document will not use them.
+
+**`values.py` is where step 4's `unit`, `direction` and `value_high` earn their place.** Real
+targets in real specs include `85%`, `3% to 8%`, `under 1 second`, `under £1,200`, `under 3p`
+and `0.85`. A comparator plus a single value holds only the first kind. Percentages become
+ratios because that is what measured values are; durations and money keep their own units,
+since 1200 pounds is not 12 of anything. Where a direction is inferred rather than read —
+a bare `85%` in a Target column is almost certainly a floor but does not say so — the
+assumption is recorded on the candidate and shown to whoever confirms it, because every
+clause is created `provisional` and the Layer proposes the reading rather than deciding it.
+
+**`markdown.py` carries line numbers everywhere**, so a citation resolves to the lines that
+stated a promise rather than to the file containing it. An unnumbered subsection inherits its
+nearest numbered ancestor's ref, so a metrics table under `### Retrieval` inside
+`## 8. Success metrics` is still section 8 — a ref built from the subsection's own title
+would move the moment someone renamed the heading. Ordinals are counted per resolved ref
+across the whole document, so two subsections sharing a parent do not both start at 1 and
+issue the same ref twice.
+
+### The third fixture, and the four defects it found
+
+`tests/fixtures/alien_spec.md` is written in a deliberately unfamiliar style: prose
+thresholds, no metrics table, `2)` numbering, `| Signal | Bar | Commentary |` headers. It
+exists because the two reference specs were written by one author in one style, both using an
+identical `| Metric | Target | Why |` table, so a parser tuned to them would look agnostic
+and not be. It paid for itself immediately.
+
+| Defect | Why it mattered |
+|---|---|
+| Prose mining was gated on a section **title** matching a vocabulary of English words | A document with a heading like "Service levels" had every bar in it silently ignored. This is exactly the fitting AC-21 exists to catch, and two same-author fixtures could never have surfaced it. Now driven by what the sentence says: a number plus an obligation word, where the obligation guard keeps "volume is roughly 4,000 messages per day" from becoming a promise nobody made |
+| A table headed `Signal` rather than `Metric` lost its label | Both rows were dropped. The first column of a promises table is its subject, so it is now the fallback rather than requiring config for every possible spelling |
+| A sentence stating two bars yielded one | "under 1500ms, and the 95th percentile under 4 seconds" lost the second silently, which is the failure mode this adapter is arranged against |
+| `"no less than 95%"` parsed as a **ceiling** | `_AT_MOST`'s `less than` matched inside `_AT_LEAST`'s `no less than` and was tested first. An inverted comparator is the most damaging parse error available: every value above the bar would read as a breach |
+
+**Two more found by reading output rather than by a test.** `85 * 0.01` is
+`0.8500000000000001` in binary floating point, so no stored threshold would have compared
+equal to a written one — an invisible discrepancy is worse than an obvious one, because a
+clause that should read `met` reads `missed` for no visible reason. And a clause read from
+prose no longer gets a metric name at all: a slug built from a sentence
+(`on_no_less_than_95_of_unusable_photos`) would never match what an eval source calls the
+number. It records that a bar exists, carries an assumption saying so, and leaves the
+measurement to a human-confirmed binding — which is what onboarding step 5 is for.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+.............................                                            [100%]
+173 passed in 5.26s
+```
+
+Against the reference specs the adapter independently lands on the same refs the prototype
+used — `TRI-11.2` for escalation recall, `PD-8.8` for the critical-case bar — extracting 10
+and 12 numeric thresholds with every section accounted for, no duplicate refs, and the
+`3% to 8%` band kept intact. The alien spec imports on configuration alone, yielding all
+eight of its bars including the two-bar sentence, the prose band and the `£900` ceiling.
+
+### 6b — The eval adapter. Next.
+
+Run files first, then Langfuse. This is where AC-2's reconciliation is earned: all 48
+candidate files enumerated, 47 classified as run records, `v1.json` classified as
+not-a-run, and **zero silently skipped**.
+
+### 6c — The code adapter. After 6b.
+
+The enforcement scan, producing `enforcement_fact` rows. It looks for a threshold comparison
+and, separately, for how the run set was chosen — a `[-1]`, a `sorted(...)[-1]`, a "latest"
+selector — and records `scope: latest_only`. That is what turns condition 1 from invisible
+into a finding. Conservative by design: anything it cannot read confidently becomes `partial`
+with a note rather than a guess.
+
+---
+
 ## Next
 
-Step 6, the adapters. Three of them, in order:
-
-**Spec.** A deterministic structural pass over markdown — headings into sections, tables into
-rows, prose lines carrying a comparator, with line ranges kept so a citation points at lines
-rather than a file — then an LLM pass per section emitting clause candidates with metric,
-comparator, value, value_high, unit and kind. Per-section failure isolation satisfies EC-2:
-name the section that failed and import the rest. Stable refs come from `clause_identity`,
-matched on metric name, then identity key, then pgvector similarity, and only then treated as
-new (AC-1, H3).
-
-**Eval.** Run files first, then Langfuse. This is where AC-2's reconciliation is earned: all
-48 candidate files enumerated, 47 classified as run records, one classified as not-a-run, and
-**zero silently skipped**. The count of source runs against stored observations is the proof,
-and it only means something if "not a run" and "failed to import" are counted separately.
-
-**Code.** The enforcement scan, which produces `enforcement_fact` rows. It looks for a
-threshold comparison and, separately, for how the run set was chosen — a `[-1]`, a
-`sorted(...)[-1]`, a "latest" selector — and records `scope: latest_only`. That is what turns
-condition 1 from invisible into a finding. Conservative by design: anything it cannot read
-confidently becomes `partial` with a note rather than a guess.
+Finish step 6: the eval adapter (6b), then the code adapter (6c). Both are described above.
 
 ---
 
