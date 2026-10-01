@@ -18,17 +18,18 @@ and how it was verified.
 | 1 | Branch, venv, pytest, Alembic scaffolding, spec docs committed | **done** |
 | 2 | Migration 1: `org`, `product`, `source`, `binding`, RLS, roles, isolation tests | **done** |
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
-| 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | next |
-| 5 | The metric engine, tiers 1 to 3 | not started |
+| 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
+| 5 | The metric engine, tiers 1 to 3 | next |
 | 6 | Adapters: spec, then eval (run files, then Langfuse), then code | not started |
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | not started |
 | 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
-**Acceptance criteria met:** AC-8, AC-14 (as a mechanism; re-asserted per finding at step 8).
-Partial: AC-2 (enumeration only). **Hard cases:** H11.
-**Tests:** 53 passing. **Commits:** 6 on `layer-phase-1-3`.
+**Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
+re-asserted per finding at step 8), AC-19 (isolation half). Partial: AC-2 (enumeration and
+idempotency; reconciliation at step 6). **Hard cases:** H3, H5, H11, H14, H15.
+**Edge cases:** EC-9. **Tests:** 77 passing. **Commits:** 8 on `layer-phase-1-3`.
 
 ---
 
@@ -235,18 +236,140 @@ $ .venv/bin/python -m pytest
 
 ---
 
+## Step 4 — Migration 2: the record itself. Done.
+
+**What it had to achieve.** The eight tables the read half reasons over, with isolation and
+append-only enforcement landing alongside them rather than after.
+
+**What was built.** `clause`, `clause_identity`, `observation`, `enforcement_fact`, `entity`,
+`link`, `proposal`, `audit_event` in migration `e56fae9`; append-only triggers in
+`layer/db/rls.py`; `tests/test_schema_guarantees.py`, 24 tests.
+
+**How it was built.**
+
+Models first, then `alembic revision --autogenerate`, then the generated migration was
+hand-edited to append what autogenerate cannot see: policies, grants and triggers.
+Autogenerate also emitted `pgvector.sqlalchemy.vector.VECTOR(...)` without importing
+pgvector, so the import is added by hand.
+
+**Three departures from PRD B2's data contract**, each forced by the fixtures rather than
+invented, and each with a test:
+
+`clause` carries `unit`, `direction` and `value_high`. Real targets in the fixture specs
+include `3% to 8%`, `under 1 second`, `under £1,200` and `MRR 0.85`. A comparator and a
+single value cannot hold a band, and without a unit the Layer cannot tell `0.85` as a ratio
+from `85` as a percentage from `850` as milliseconds. A CHECK refuses a one-ended `between`,
+because that is a parse that half failed and would silently never match anything.
+
+`observation` carries `passed` and `total` beside `value`. The verdict rule is a Wilson
+interval and it needs n; 19/20 and 190/200 are both "95%" and are very different claims,
+which is why the fixtures have a stats module at all. Where a source supplies only a rate,
+`total` is null and the verdict can only ever be `cannot_confirm` — which is the honest
+answer rather than a limitation.
+
+`enforcement_fact` exists at all. B2 has no table for what CI actually checks, and AC-4 and
+AC-15 cannot be answered without one. `scope` is the load-bearing column: `enforced: true,
+scope: latest_only` is the condition a boolean cannot express, and it is the reason the
+product has anything to find.
+
+**Two corrections to B2's idempotency key**, both of which would let duplicates through:
+
+`product_id` belongs in it. Without it, two products in one org that each have an unbound
+metric of the same name collide on `(org, NULL, metric, NULL)`.
+
+`NULLS NOT DISTINCT`. In Postgres a NULL is distinct from every other NULL, so the plain
+four-column constraint never fires for a metric no clause mentions, or a production reading
+with no run url — precisely the rows a repeated pull duplicates. Available because the
+server is Postgres 17.
+
+**Other choices worth recording.**
+
+- `observation.clause_ref` is text, not a foreign key. An observation may exist for a metric
+  no clause mentions; that is H16, reported as `uncovered / metric_without_clause`, where the
+  gap is the absent clause rather than the measurement. A foreign key would make the
+  interesting case unstorable.
+- `link` endpoints are refs, not foreign keys, because a link routinely joins records the
+  Layer does not hold — a Linear ticket to a Notion requirement. The Layer holds the
+  statement that they are related, which is the product; it does not re-host either end.
+- `clause.verdict` is stored, as B2 and AC-13 require, but `verdict_at` is stored with it.
+  A verdict is the result of the last measurement pass rather than a property of the text,
+  and without a timestamp one computed before the latest backfill is indistinguishable from
+  a current one.
+- `version` tracks the promise, not the answer. Rewording supersedes a row and increments
+  `version`; recomputing a verdict does not, because a measurement is not a change to what
+  was promised.
+- `observation` and `audit_event` use bigint identities rather than uuids: they are the two
+  tables expected to grow without limit, and `obs:102` is the ref shape the output contract
+  already uses.
+- `Double` rather than `Numeric` for every measured value, because each consumer is
+  statistical and `Numeric` would force a Decimal/float coercion at every comparison.
+
+**`audit_event` is append-only in the database, not by convention.** UPDATE is refused
+outright. DELETE and TRUNCATE are refused unless a transaction-local `app.erasure` flag is
+set. Two triggers are needed, not one: the row-level trigger cannot see TRUNCATE, which
+fires no row triggers and would otherwise be a silent way to empty the audit log. The hatch
+exists because EC-9 and SEC-8 require a tenant-scoped hard delete reconciled with append-only
+history, and audit item P9 records the conflict — an absolute refusal would make the right to
+erasure unimplementable. It is narrow, has to be asked for by name, and is itself auditable.
+The test harness was changed to use that same hatch when truncating between tests, so it
+cannot quietly enjoy a privilege production lacks.
+
+**`proposal` makes the approval record structural.** A CHECK refuses a decided proposal with
+no decider and an open one carrying a decision, so PRD B5's first unacceptable failure — a
+write with no approval record — is unstorable rather than merely discouraged. A partial
+unique index on open rows allows only one open proposal per target and field (B4 item 4),
+while leaving a field changeable more than once over its life.
+
+**A migration bug the downgrade test caught.** The `rls` helpers defaulted to the live
+`TENANT_TABLES` constant. Once migration 2 added eight tables, migration 1's `downgrade()`
+began trying to revoke privileges on tables it had never created, failing with
+`relation "audit_event" does not exist`. A migration must describe the schema as it was when
+it was written, so the defaults were removed entirely and every migration now names its own
+tables; the constant remains for application code. Transactional DDL meant the failed
+downgrade rolled back cleanly rather than leaving a half-torn-down database, which is worth
+noting as the reason this was a nuisance rather than an incident.
+
+**Verification.**
+
+```
+$ .venv/bin/alembic downgrade base && .venv/bin/alembic upgrade head
+$ .venv/bin/python -m pytest
+........................................................................ [ 93%]
+.....                                                                    [100%]
+77 passed in 4.36s
+```
+
+A full downgrade to base leaves only `alembic_version` and removes the trigger function, so
+the migration is reversible rather than one-way. The 24 new tests assert what the schema
+refuses: duplicate observations including the two NULL cases, an incoherent sample count,
+state and verdict set independently (AC-13), a one-ended band, coexisting clause versions
+(H3), one metric serving two clauses (H5), an unapproved or doubly-open proposal, an audit
+event that cannot be updated or deleted without an erasure, that the erasure flag does not
+leak into the next transaction on a pooled connection, `enforced: true` with
+`scope: latest_only` (AC-15, H14), and that none of the new tables leaks across tenants.
+
+---
+
 ## Next
 
-Step 4, migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`,
-`entity`, `proposal` and `audit_event`, with an append-only trigger on `audit_event` and row
-level security extended to each.
+Step 5, the metric engine. The one piece neither document specifies and the crux of product
+agnosticism, because the fixture run files contain **no metric values at all** — every
+headline number is derived by iterating per-case rows, and policydesk's come from a module
+carrying a hardcoded banned-article dictionary and rank semantics.
 
-Two shapes in it are departures from PRD B2 and are the reason this step is worth care.
-`clause` carries `unit`, `direction` and `value_high`, because real spec targets include
-`3% to 8%`, `under 1 second` and `under £1,200`, none of which `comparator + value` can
-hold. `observation` carries `passed` and `total` as well as `value`, because the Wilson
-interval needs n and a rate alone cannot supply it — a point the specification's data
-contract does not account for.
+Three tiers, where the third is a refusal:
+
+1. **The source names a number.** A run-level meta field, a committed sidecar carrying a
+   pass/total pair, a Langfuse score, a CSV column. Read at a configured JSON pointer, with
+   no product knowledge at all.
+2. **Per-case rows plus a declarative definition** in `source.config`: `rate`, `accuracy`,
+   `recall`, `precision`, `pass_rate`, `mean`, `percentile`, each with an optional row filter
+   and value coercion. This covers every bar-carrying metric in both fixtures, including the
+   subset metric that condition 2 turns on.
+3. **Neither works, so the Layer says so.** MRR, recall@k with rank semantics, bespoke
+   exposure rules. Reported as `uncovered / no_metric` with the clause `not_measured`.
+   Computing these would mean reimplementing each customer's scorer, which is building the
+   eval half — the thing handoff section 4 forbids outright.
 
 ---
 
