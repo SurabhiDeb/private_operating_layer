@@ -28,12 +28,23 @@ searching for it.
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
-**Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
-re-asserted per finding at step 8), AC-19 (isolation half). AC-18 and AC-21 (spec import half).
-**AC-1, AC-2, AC-4, AC-9, AC-13,
-AC-17, AC-18, AC-19, AC-20, AC-21** — AC-4 and AC-15 at the adapter, their queries in
-step 8. **Hard cases:** H1, H3, H5, H6, H11, H14, H15.
-**Edge cases:** EC-2, EC-3, EC-4, EC-6, EC-9. **Tests:** 290 passing. **Commits:** 19 on `layer-phase-1-3`. **Migrations:** 4.
+**Coverage, taken from the test markers rather than from prose.**
+
+| | |
+|---|---|
+| Acceptance criteria met | AC-1, AC-2, AC-4, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21 |
+| Hard cases | H1, H3, H5, H6, H11, H14, H15 |
+| Edge cases | EC-2, EC-4, EC-6, EC-9 |
+| User stories | **none yet.** AC-11 asks for a test per US-1 to US-12 criterion and the `story` marker is unused. Step 10's job |
+
+AC-4 and AC-15 hold at the adapter; their finding queries arrive in step 8. AC-14 holds as a
+mechanism — a branch URL cannot escape the registry — and is re-asserted per finding in step 8,
+when real findings carry real evidence.
+
+Still outstanding: AC-3, AC-5, AC-6 (step 8, and AC-6 needs phase 6's sources), AC-7, AC-10 to
+AC-12 (step 10), AC-16 (phase 5).
+
+**Tests:** 290 passing. **Commits:** 19 on `layer-phase-1-3`. **Migrations:** 4.
 
 ---
 
