@@ -23,18 +23,17 @@ searching for it.
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
 | 5 | The metric engine, tiers 1 to 3 | **done** |
 | 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **done** |
-| 7 | The onboarding state machine and CLI; onboard all three fixtures | next |
-| 8 | Verdicts and the five finding queries; reproduce all three C1 conditions | not started |
+| 7 | The onboarding state machine and CLI; onboard all three fixtures | **done** |
+| 8 | The five finding queries; reproduce all three C1 conditions | next |
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
 **Acceptance criteria met:** AC-8, AC-9 (schema level), AC-13, AC-14 (as a mechanism;
 re-asserted per finding at step 8), AC-19 (isolation half). AC-18 and AC-21 (spec import half).
-**AC-2 (reconciliation proven
-against the committed history), AC-4 and AC-15 (adapter half; the queries in step 8).**
-Partial: AC-1 (identity keys emitted; resolution in step 7).
-**Hard cases:** H1, H3, H5, H6, H11, H14, H15.
-**Edge cases:** EC-2, EC-4, EC-9. **Tests:** 242 passing. **Commits:** 16 on `layer-phase-1-3`. **Migrations:** 3.
+**AC-1, AC-2, AC-4, AC-9, AC-13,
+AC-17, AC-18, AC-19, AC-20, AC-21** — AC-4 and AC-15 at the adapter, their queries in
+step 8. **Hard cases:** H1, H3, H5, H6, H11, H14, H15.
+**Edge cases:** EC-2, EC-3, EC-4, EC-6, EC-9. **Tests:** 290 passing. **Commits:** 19 on `layer-phase-1-3`. **Migrations:** 4.
 
 ---
 
@@ -822,29 +821,122 @@ $ .venv/bin/python -m pytest
 
 ---
 
+## Step 7 — Onboarding. Done.
+
+**What it had to achieve.** Make onboarding the only way content enters, with each of PRD
+B2's seven steps gated by the one before it, and a product reaching `live` with no code
+change to the Layer.
+
+**Files.** Commits `5812046` and `6c6e9ed`.
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/verdicts/stats.py` | added | The Wilson score interval at `Z_95 = 1.959963984540054`. Reimplemented rather than imported, because a fixture may never be a dependency, and the constant is the fixtures' own so a number the Layer reports and one the product reports agree to the last digit |
+| `layer/verdicts/rules.py` | added | `judge()` and `state_for()`. The verdict is read from the most recent observation, because "right now" is what it means; whether a bar was ever missed is the drift finding's question |
+| `layer/core/audit.py` | added | The only writer to `audit_event`. Takes the caller's session so the event and the change it describes commit or roll back together — a log that survives a failed transaction is a log of things that did not happen |
+| `layer/onboarding/identity.py` | added | `resolve()`: metric name, then recorded identity key, then statement similarity. Deterministic via difflib rather than embeddings, so AC-1 holds without a model provider being reachable |
+| `layer/onboarding/persist.py` | added | The three writers. Clauses are versioned, observations are upserted and never updated, enforcement facts are replaced per source because what CI checks is a current fact and not a history |
+| `layer/onboarding/bindings.py` | added | Step 5. Proposes pairings and **stops**; `decide()` validates a human's decision and records it either way |
+| `layer/onboarding/state.py` | added | The seven steps, the status transitions, and `require_live()` — the single function every proposal path calls, so B3 rule 8 is structural rather than remembered |
+| `layer/onboarding/run.py` | added | Wires adapters to the state machine, so the state machine depends on no adapter and an adapter depends on no database |
+| `layer/cli.py`, `layer/__main__.py` | added | `python -m layer`. Every command takes `--org` and `--as`; there is deliberately no flag that skips the gate |
+| `layer/db/models.py` | modified | `Binding` gains `decision` and `decision_note` |
+| `layer/db/alembic/versions/b7d2f4a16c38_*.py` | added | Migration 4. Its downgrade deletes rejections rather than keeping them, since a rejection without the column becomes a confirmation nobody made |
+| `layer/core/db.py` | modified | Autoflush turned on, with the reason recorded — see the stale reads below |
+| `tests/fixtures/alien_runs/*.json`, `alien_gate.py` | added | The third fixture gains a run format and a gate idiom neither reference product uses, so AC-21 covers all three source roles rather than only the spec |
+| `tests/test_onboarding.py` | added | 27 tests: the step gates, identity, the binding gate, verdicts, the audit trail, and the three agnosticism criteria |
+| `tests/test_cli.py` | added | 21 tests over the operator surface — mostly asserting output, because for phases 1 and 2 the output is the product |
+
+**The seven steps, running against a real product.**
+
+```
+registering -> sources_bound -> assertions_confirmed -> live
+
+spec        : 51 new, 0 reworded, 0 unchanged
+spec again  : 0 new, 0 reworded, 51 unchanged
+backfill    : 141 observations stored, 0 duplicates refused, 47 of 48 documents imported
+backfill x2 : 0 observations stored, 141 duplicates refused, 47 of 48 documents imported
+scan        : 3 enforcement fact(s); 7 stated metric(s) not checked anywhere
+measure     : not_applicable 41, cannot_confirm 3, not_measured 7
+```
+
+The second line of each pair is the point. A re-import writes nothing and a repeated backfill
+refuses every row, so AC-1 and AC-2 are demonstrated by a number rather than by the absence
+of a change.
+
+**`cannot_confirm` for the three bound clauses is correct, not a shortfall.** 47 of 50 team
+accuracy against a bar of 85% gives an interval of 0.838 to 0.979, which does not sit wholly
+on either side. PRD B2 expects this to dominate and calls it "the honest state rather than a
+defect. A system that reports met or missed for everything is guessing."
+
+### Five defects, and what each would have cost
+
+**Two distinct clauses were merged into one ref.** "p50 latency under 1 second" and "p95
+latency under 3 seconds" score **0.906** on text similarity, so the p95 clause was stored as
+*version 2 of the p50 clause* and the p50 promise silently disappeared. A differing metric
+name now vetoes a similarity match outright, and resolution excludes rows the same import
+just wrote. This is the failure PRD B2 means by "identity is the load-bearing requirement":
+text similarity is a weak signal and must never outrank an explicit disagreement.
+
+**A product whose bars are all in prose could never leave the gate.** Such clauses carry no
+metric name — the spec adapter refuses to invent one — so nothing name-matched and nothing
+could be confirmed. `decide` now validates the *components* of a pairing rather than
+requiring the pair to have been pre-computed, because pairing a measured number with a
+promise the source never named is the main thing step 5 is for. Found only because the third
+fixture states its bars in prose; both reference products use tables.
+
+**A bound metric and its clause could disagree on unit.** A p95 measured in milliseconds
+against a bar stated in seconds compares 1200 to 4 and reports a confident breach that is
+purely a unit error — a wrong finding, which B6 puts at zero tolerance. Refused at the gate
+rather than converted: guessing which side is authoritative is how a bar gets quietly
+rescaled.
+
+**The enforcement scan could not look for a prose clause's bar**, having no metric name to
+search for. The confirmed binding is the bridge — it is a human saying which measured number
+answers that promise, which is also the name the gate is likely to use — and a clause with no
+bound metric is now reported as not looked for rather than passed over in silence.
+
+**Two stale reads that both looked like logic bugs.** The session ran with `autoflush=False`,
+inherited from EarlyEcho's pattern. Onboarding writes and then reads back within one
+transaction: it records a binding and then asks whether any remain undecided, and it computes
+verdicts by mutating clause rows and then counts them. Both reads returned the pre-write
+rows, so a product sat at the gate with nothing left to decide, and every clause reported the
+verdict it was created with. Autoflush is on, which is also SQLAlchemy's default.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+..                                                                       [100%]
+290 passed in 18.69s
+```
+
+Three products onboard to `live` — the two reference ones and the alien fixture, whose spec
+states bars in prose, whose runs use a format neither reference product uses, and whose gate
+is written in a different idiom. Nothing about any of them appears anywhere in `layer/`.
+
+---
+
 ## Next
 
-Step 7, onboarding: the seven-step state machine and the CLI, where the three adapters stop
-being libraries and become the only way content enters the Layer.
+Step 8, the five finding queries. This is the milestone: the two real breaches stop being
+numbers in a test and become findings with citations.
 
-The parts that are new rather than assembly:
+Plain SQL over `clause × binding × observation × enforcement_fact × link`, with no metric name
+and no product name in any query. Each returns the B1 Finding shape with `evidence`,
+`evidence_links` and `unresolved`, resolved through the per-product registry built in step 3.
 
-**Identity resolution**, which finishes AC-1. A candidate matches an existing clause by
-metric name, then by `clause_identity`, then by pgvector similarity over the statement, and
-only then counts as new. A reworded statement bumps `version` and keeps its ref and every
-link intact (H3).
+- `find_drift` — any observation in the **full** sequence violating its clause, with worst,
+  runs_missed and runs_total, and the latest value reported separately. Condition 1 surfaces
+  here: 7 of 47 runs breaching while the newest is clean
+- `find_unenforced` — a clause metric with no `enforcement_fact`, **or** one whose fact has a
+  narrowed scope, reported as `enforced: true, scope: latest_only` (AC-15, H14)
+- `find_uncovered` — `no_assertion | no_metric | metric_without_clause | not_measured_recently`.
+  The gate already surfaces the first and third as lists; this turns them into findings
+- `find_stalled_decisions`, `find_underspecified` — explicit refusals naming the missing
+  `decision` and `production` sources, so AC-20's behaviour holds rather than returning empty
 
-**The binding gate.** `require_live(product)` in one place, so B3 rules 8 and 9 are
-structural rather than remembered. Step 5 presents candidate metric-to-clause bindings and
-**stops**. The tier-2 metric definition is confirmed alongside the binding, because it is
-itself an assertion about what the number means — and so is a `metric_alias`, which 6c added
-for the same reason.
-
-**An audit event for every write**, which is AC-9 end to end rather than at the schema level.
-
-Done means an arbitrary product with a spec file and an eval directory reaches `live` with no
-code change to the Layer, verified by onboarding all three fixtures separately — the alien
-one being the test rather than a bonus.
+Plus the no-causal-language test over every generated summary.
 
 ---
 

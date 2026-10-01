@@ -15,21 +15,25 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phase 1 of 3 in progress — steps 6 of 10 done.** See [`PROGRESS.md`](PROGRESS.md) for the
+**Phase 1 of 3 — steps 7 of 10 done. Onboarding works end to end.** See [`PROGRESS.md`](PROGRESS.md) for the
 plan, what is finished, and a technical summary of each step.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | Onboarding: the seven-step state machine and its CLI |
-| All 12 tables, reversibly migrated, with an append-only audit log | The five finding queries |
-| Refs: the `kind:id` citation scheme and its resolver registry | The MCP server |
-| A git source pinned to an immutable commit | The write half: proposals and approvals |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The five finding queries |
+| All 12 tables, reversibly migrated, with an append-only audit log | The MCP server |
+| Refs: the `kind:id` citation scheme and its resolver registry | The write half: proposals and approvals |
+| A git source pinned to an immutable commit | |
 | The metric engine: reads a number, computes one, or declines to | |
 | Spec, eval and code adapters, with Langfuse as a second transport | |
-| 242 tests | |
+| **Onboarding: all seven steps, with the binding gate** | |
+| **Verdicts, via a Wilson interval** | |
+| **A CLI: `python -m layer`** | |
+| 290 tests | |
 
-Nothing is usable end to end yet. The honest summary is that the foundation is in and the
-adapters are next.
+A product can now be onboarded end to end: registered, bound to its own spec and eval
+sources, imported, backfilled, paired against its promises by a human, and measured. What it
+cannot yet do is tell you what it found — the finding queries are next.
 
 ---
 
@@ -122,8 +126,21 @@ cp .env.example .env     # then fill in the two database URLs
 .venv/bin/python -m pytest
 ```
 
-The onboarding CLI (`python -m layer ...`) arrives at step 7, and the MCP server at step 9.
-Neither exists yet; `PROGRESS.md` tracks both.
+```bash
+# 6. Onboard a product. Nothing exists in the Layer until this runs.
+.venv/bin/python -m layer org create acme
+.venv/bin/python -m layer product register --org <id> --as you@example.com triage
+.venv/bin/python -m layer source bind   --org <id> --as you@example.com triage \
+    --role spec --kind repo --config '{"local_path":"...","repo_url":"...","path":"SPEC.md"}'
+.venv/bin/python -m layer spec     --org <id> --as you@example.com triage
+.venv/bin/python -m layer backfill --org <id> --as you@example.com triage
+.venv/bin/python -m layer bindings list --org <id> --as you@example.com triage
+#   ... confirm or reject each candidate, then:
+.venv/bin/python -m layer measure  --org <id> --as you@example.com triage
+.venv/bin/python -m layer status   --org <id> --as you@example.com triage
+```
+
+The MCP server arrives at step 9 and does not exist yet; `PROGRESS.md` tracks it.
 
 ---
 
