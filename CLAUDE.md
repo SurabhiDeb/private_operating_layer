@@ -141,6 +141,14 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   call `Base.metadata.create_all`; `api/main.py:26` does and that is EarlyEcho's problem.
 - **Run files may contain no metric values at all.** The fixtures derive every headline
   number by iterating per-case rows. Assume nothing is precomputed.
+- **A run directory contains files that are not runs.** Fixture A's holds 48 `.json`
+  files and 47 run records; `v1.json` is a bare list from an earlier format. An adapter
+  that globs `*.json` and skips what it cannot parse makes AC-2's reconciliation compare
+  47 to 47 and look correct. Classify "not a run record" separately from "a run that
+  failed to import", and report both (EC-2, EC-4).
+- **`git ls-tree` does not glob.** It rejects `:(glob)` magic and treats
+  `products/*/runs/*.json` as matching nothing — succeeding, with no output. Path
+  filtering happens in Python via `PurePath.full_match`. See `layer/adapters/repo.py`.
 
 ## Verify, do not assert
 
