@@ -15,7 +15,7 @@ result has been quoted, never when the code merely exists.
 |---|---|---|
 | 1 | Branch, venv, pytest, Alembic scaffolding, spec docs committed | **done** |
 | 2 | Migration 1: `org`, `product`, `source`, `binding`, RLS, roles, isolation tests | **done** |
-| 3 | `refs` registry and resolvers; the `repo` source with revision pinning | not started |
+| 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
 | 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | not started |
 | 5 | The metric engine, tiers 1 to 3 | not started |
 | 6 | Adapters: spec, then eval (run files, then Langfuse), then code | not started |
@@ -24,7 +24,7 @@ result has been quoted, never when the code merely exists.
 | 9 | The stdio MCP server | not started |
 | 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
 
-**Acceptance criteria met so far:** AC-8. Hard cases: H11.
+**Acceptance criteria met so far:** AC-8, AC-14 (the mechanism; re-asserted per finding at step 8). Partial: AC-2 (enumeration only). Hard cases: H11.
 
 ---
 
@@ -135,130 +135,88 @@ migrated, rather than erroring once per test.
 
 ---
 
-## Next
+## Step 3 — Refs, resolvers, and a pinned repository. Done.
 
-Step 3, the `refs` registry: the `kind:id` URN scheme (`clause:`, `obs:`, `file:`,
-`eval_metric:`, `decision:`, `ticket:`, `code_change:`) with one resolver per kind turning a
-ref into an immutable URL. This is the mechanism that makes adding a source system a matter
-of one resolver and one adapter, with no change to the query layer, and it is what AC-14
-and AC-7 are enforced through. It lands before migration 2 because `clause` and
-`observation` store refs and should be written against a settled scheme.
+**Why a URN and not a URL.** Every citation in the system is a `kind:id` string —
+`clause:TRI-11.2`, `obs:102`, `file:products/triage/gate.py#L25`. Storing a URL would mean
+storing a guess about how that system will look later: its host, its revision scheme, its
+path layout. Storing identity and deriving the URL at read time is what makes adding a
+source system a matter of one resolver, with no change to the query layer. Refs are scoped
+to an org and are never globally unique (H11), so resolution always happens inside a tenant
+context.
+
+**`layer/refs/ref.py`.** Parsing splits on the first colon only, because ids legitimately
+contain colons — a Slack permalink, a timestamped run id — and splitting on the last would
+silently rewrite them. A malformed ref raises rather than being coerced into something
+plausible; PRD B5 ranks a fabricated ref third among unacceptable failures, so a
+half-readable one must not be quietly repaired.
+
+**`layer/refs/registry.py`.** Kind to resolver, instantiated per unit of work rather than
+as a module global, because resolvers close over a tenant's sources and a process-wide
+registry would be a route for one tenant's repository to answer another tenant's ref.
+Declining to resolve is a first-class outcome, not an error: `links()` returns
+`(evidence_links, unresolved)` in the finding's own shape, preserves order and duplicates
+— evidence is evidence, and tidying the list would misreport what was cited — and drops
+nothing. AC-14 is enforced here as well as at the source, as a second line, so that a
+resolver added later cannot reintroduce a branch citation without a test failing.
+
+**`layer/adapters/repo.py`.** A repository held at one revision, with three guarantees that
+otherwise rot quietly:
+
+- `pin()` accepts `HEAD`, a branch or a tag as a *request*, and stores only the sha that
+  resolved to. The constructor refuses anything that is not a commit sha, so no later code
+  path can cite a moving target.
+- `read()` uses `git show <rev>:<path>` rather than reading the working tree. A clause
+  imported from a spec is then the text at the revision its citation names. Reading the
+  working tree would make every citation a near-miss — right file, possibly different
+  content — which is the worst kind of wrong because it looks right.
+- A `-dirty` sha, a real shape in committed eval metadata, is kept as provenance and never
+  used to build a URL. Nobody else can obtain that tree, so offering a link to it would be
+  a citation that cannot resolve for the reader.
+
+The URL shape is a config template defaulting to GitHub's, so a GitLab, Gitea or internal
+host needs a configuration value rather than a code change (rule R2).
+
+**Two defects the tests caught.**
+
+`git ls-tree` does not glob. It rejects `:(glob)` pathspec magic outright and treats a bare
+`products/*/runs/*.json` as matching nothing — exiting zero, with no output. The eval
+backfill would have enumerated no files, stored no observations and reported no error,
+which is precisely the failure AC-2 exists to catch. Filtering moved into Python via
+`PurePath.full_match`, which is anchored and does not let `*` cross a separator.
+
+Fixture A's runs directory holds **48 `.json` files but 47 run records**. `v1.json` is a
+bare JSON list from an earlier format, with no `meta` and no `results`. The prototype
+reports "7 of 47 runs" and is right about runs; 48 is right about files. The trap is for
+step 6: an adapter that globs `*.json`, fails to parse that one and skips it quietly would
+leave AC-2's reconciliation comparing 47 against 47 and looking correct. The adapter must
+distinguish "not a run record" from "a run that failed to import" and account for both out
+loud (EC-2, EC-4). Recorded in `CLAUDE.md` and in the test's docstring.
+
+**Tests.** 53 pass, 30 of them new.
+
+```
+$ .venv/bin/python -m pytest
+.....................................................                    [100%]
+53 passed in 3.13s
+```
+
+`tests/test_refs.py` covers parsing, the first-colon rule, malformed refs, unknown kinds
+resolving to None rather than raising, order and duplicate preservation, and the branch-URL
+guard. `tests/test_repo_source.py` covers pinning, the refusal to construct on a moving
+revision, reading at the commit rather than the working tree, listing at the revision, URL
+templating, and the resolvers — the mechanism tests against a throwaway repository built in
+the test, because proving that pinning works should not require a particular product's
+files, and two against the fixture repository, because "the revision we pin is the revision
+a reader opens" is only worth believing against a real history.
 
 ---
 
-# Beyond phase 3 — the order changed, and why
+## Next
 
-Recorded 1 Oct 2026. The handoff's build order runs phase 4 (HTTP, a token, Dust as a
-client) before phase 5 (the write half). **That is reversed here.** The reasoning is below
-so it is not re-argued, and so that a reader who knows the handoff can see where this
-departs from it.
-
-## A retraction first
-
-Earlier advice in this project was to decide the prototype's 15 open proposals by hand
-before writing any code, on the grounds that PRD C3 item 8 calls the acceptance rate the
-top open item ahead of everything else. **Those 15 proposals are not real.** They are
-hand-written snapshot content in `Operating Layer.html`, not output from a working
-generator over real data. That route to AC-16 does not exist.
-
-The consequence is that the acceptance rate can only be measured after the write half is
-built on top of phases 1–3. It makes phase 5 more important, not less, and it is the single
-strongest argument for the reordering below.
-
-## Why phase 5 comes before phase 4
-
-The specification already says so. PRD D2: *"Below 50% the proposals are noise and that
-must be known **before a UI is built around them**. That is AC-16."*
-
-1. **Phase 4 delivers no capability.** It is a transport change plus a rented conversation
-   surface. Verified during step 1: with `mcp` 2.2.0 it is `run(transport="streamable-http")`
-   in place of `run(transport="stdio")`. Nothing in the Layer's data model or logic changes.
-2. **Phase 4 without phase 5 is the thing the handoff forbids.** Dust over read-only
-   findings is a chat window onto a dashboard, and section 15 rules out a read-only
-   dashboard explicitly: *"Braintrust and Langfuse can add views in a quarter. The
-   write-back is the moat."* Approving proposals is phase 5's output, so the surface has
-   nothing to approve until phase 5 exists.
-3. **Phase 5 has no external dependencies. Phase 4 has two unresolved ones.** Open
-   questions 1 and 2 — whether hosted Dust gates remote MCP servers by plan tier, and what
-   auth scheme its credential policy accepts — are outside this project's control and still
-   unverified.
-4. **Security order.** SEC-7 and audit item P7 (rate limiting) land with HTTP, and B3
-   rule 3 states the critic is itself an LLM and itself injectable. Exposing an endpoint
-   before the approval boundary is built and tested means the first thing on the public
-   internet is a server whose write paths are unfinished.
-
-## Phase 4 becomes a half-day spike, not a deferral
-
-Open questions 1 and 2 cannot be answered by reasoning, only by trying. At the phase-3
-boundary: put the server behind HTTP with a throwaway token, register it in hosted Dust as
-a remote MCP server, record the plan tier and the accepted auth scheme in this file, and
-stop. That de-risks phase 4 without reordering the real work.
-
-## Three things phase 5 needs that the plan does not yet carry
-
-**An actor model, which is not auth.** AC-16 records `decided_by`, and the role rules need
-enforcing: a pm decides every proposal kind, an engineer decides `ci_change` and
-`eval_case`, an agent never decides anything. That needs identity and attribution — a
-`user` table with a role, and an `--as <email>` argument on the decide commands. It does
-**not** need sessions or bearer tokens, which stay in phase 4. This is a deliberate partial
-reversal of decision D8 (no auth in phases 1–3): attribution moves forward, authentication
-does not.
-
-**The critic scores, it never decides.** EarlyEcho's `ingestion/pipeline.py:53` auto-approves
-at confidence ≥ 0.7. That must not carry over for `clause_change`, `new_clause` or
-`ci_change` proposals. B3 rule 3 is explicit: never auto-approve a spec edit or a CI change
-on confidence score alone, because the critic is an LLM and is itself injectable. The
-0.7 / 0.5 thresholds survive as routing and display only, never as approval.
-
-**Generators, which neither document specifies.** Proposals have to originate somewhere,
-and they are thin over phase 2's findings:
-
-| Finding | Proposal it justifies |
-|---|---|
-| `drift` | A threshold change **or** a ticket. US-2 forbids both in one proposal |
-| `unenforced` | A `ci_change`, opened as a pull request (US-3, US-12) |
-| `uncovered` | A `new_clause`, or a `link` where the clause exists but is unbound |
-| production failure | An `eval_case` (C1, US-1) |
-
-This is why phase 5 is cheaper than it looks once phases 1–3 exist. The expensive part is
-not generating proposals, it is the hard cases that make the write half honest: EC-6 (two
-people decide at once, first wins and the second is told by whom), H2 (a human edit to the
-spec invalidates an open proposal rather than being merged over), H7 (evidence deleted by
-retention marks the proposal evidence-expired rather than showing it as live).
-
-## What AC-16 actually asks of a person
-
-AC-16 means the product owner sitting down and deciding roughly twenty real proposals about
-their own products. Two things follow that are easy to miss.
-
-**The band cuts both ways.** Accepting 19 of 20 is ≥ 85%, which B6 reads as a rubber stamp
-rather than a success: *"A rubber stamp on changes to the definition of correctness is
-worse than no tool, because it launders an unreviewed change as an approved one."*
-Accepting 8 of 20 is below 50% and the proposals are noise.
-
-**So it cannot be gamed.** Generating twenty trivially-correct proposals produces a number
-above the band, which is a failure, not a pass. The honest procedure is to generate whatever
-the findings justify, decide every one, and record the number wherever it lands. A result
-outside 50–85% is a finding about the product and must be reported, not tuned away —
-EC-5 says exactly this: *"a product failure to report, not to hide"*.
-
-## The revised order
-
-| Stage | What it is | Gate |
-|---|---|---|
-| Phases 1–3 | As planned above: onboarding, findings, stdio MCP | Steps 1–10 of the table at the top |
-| Spike | Half a day on hosted Dust | Open questions 1 and 2 answered in writing |
-| **Phase 5** | The write half, plus the actor slice | **AC-16: a real acceptance rate from ~20 decided proposals** |
-| Decision gate | The number decides what is worth building next | Below 50%, no surface gets built around proposals |
-| **Phase 4** | A surface. **Open: whether it is Dust at all** | See below |
-| Phases 6–7 | Unchanged. Phase 6 unblocks AC-6 and the `underspecified` finding kind | |
-
-## The phase 4 question left open deliberately
-
-Whether the surface should be Dust is not yet decided, and should not be decided before
-AC-16. Handoff section 17 says the hosted product is *"that same server plus a front end on
-it, not a rebuild"*, and the prototype already has a working six-screen vanilla-JS UI plus
-the mock in `operating_layer_main/Operating Layer.html`. Dust earns its rent for the durable
-agent loop, the scheduled triggers, per-tool approval and the multiplayer surfaces — not for
-a screen. If what is wanted is a screen, the Layer's own UI is likely cheaper than the
-integration. Open question 13 is the same question asked from the other end.
+Step 4, migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`,
+`link`, `entity`, `proposal` and `audit_event`, with the append-only trigger on
+`audit_event` and row level security extended to each. `clause` carries `unit`, `direction`
+and `value_high` for the reasons in the decision table, and `observation` carries `passed`
+and `total` as well as `value`, because the Wilson interval needs n and a rate alone cannot
+supply it.
