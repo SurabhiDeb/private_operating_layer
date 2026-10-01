@@ -1,0 +1,166 @@
+"""What an adapter produces, and how it reports what it could not do.
+
+An adapter reads one source and emits candidates. It never writes: persistence,
+identity resolution and the onboarding gates are the caller's job, so an adapter can be
+tested against a document with no database at all.
+
+**The report is as important as the candidates.** PRD EC-2 requires a spec that cannot be
+parsed to "say which part failed and import the rest", and EC-4 requires a partial result
+to be "clearly marked, naming what is missing. Never a silent partial". So every adapter
+returns an `ImportReport` whose counts must add up: everything enumerated is either a
+candidate, a deliberate skip, or a failure. Nothing is dropped.
+
+That arithmetic is what AC-2 rests on. Reconciling stored observations against source
+runs only proves anything if "this file is not a run" and "this run would not import"
+are counted separately — otherwise a quiet skip makes 47 of 47 look like success.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class Skipped:
+    """Something enumerated and deliberately not turned into a candidate."""
+
+    identifier: str
+    reason: str
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Failed:
+    """Something that should have produced a candidate and did not."""
+
+    identifier: str
+    reason: str
+    note: str | None = None
+
+
+@dataclass
+class ImportReport:
+    """The outcome of reading one source, with the arithmetic kept honest."""
+
+    source_role: str
+    candidates: list[Any] = field(default_factory=list)
+    skipped: list[Skipped] = field(default_factory=list)
+    failed: list[Failed] = field(default_factory=list)
+    #: How many things were enumerated before any were interpreted. A unit of
+    #: enumeration is whatever the adapter walks — a section, a run file — not a
+    #: candidate, since one unit routinely yields several candidates or none.
+    enumerated: int = 0
+    #: Units that yielded at least one candidate.
+    imported: int = 0
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def accounted(self) -> int:
+        return self.imported + len(self.skipped) + len(self.failed)
+
+    @property
+    def complete(self) -> bool:
+        """True when nothing went missing between enumeration and interpretation."""
+        return self.enumerated == self.accounted
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.failed)
+
+    def summary(self) -> str:
+        parts = [
+            f"{len(self.candidates)} candidate(s) from {self.imported} imported",
+            f"{len(self.skipped)} skipped",
+            f"{len(self.failed)} failed",
+            f"of {self.enumerated} enumerated",
+        ]
+        line = ", ".join(parts)
+        if not self.complete:
+            # Loud on purpose. An unbalanced report means something was dropped on the
+            # floor, which is the one outcome EC-4 forbids outright.
+            line += (
+                f"  [UNACCOUNTED: {self.enumerated - self.accounted}. "
+                f"Every enumerated item must be a candidate, a skip or a failure.]"
+            )
+        return line
+
+
+@dataclass(frozen=True)
+class ClauseCandidate:
+    """A promise read out of a source, before identity is resolved.
+
+    `ref_hint` is a suggestion. The real ref comes from `clause_identity`, so that a
+    reworded statement keeps the ref it already had (AC-1, H3). `identity_key` is what
+    that lookup uses.
+    """
+
+    identity_key: str
+    statement: str
+    kind: str = "threshold"
+    ref_hint: str | None = None
+    section: str | None = None
+    label: str | None = None
+    rationale: str | None = None
+    metric: str | None = None
+    comparator: str | None = None
+    value: float | None = None
+    value_high: float | None = None
+    unit: str | None = None
+    direction: str | None = None
+    k: int | None = None
+    source_locator: str | None = None
+    #: Readings inferred rather than stated, shown to whoever confirms the clause.
+    assumptions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ObservationCandidate:
+    """One measured number from one run, ready to be stored."""
+
+    metric: str
+    value: float
+    measured_at: datetime
+    source_kind: str = "eval"
+    clause_ref: str | None = None
+    passed: int | None = None
+    total: int | None = None
+    unit: str | None = None
+    prompt_version: str | None = None
+    corpus_sha: str | None = None
+    code_rev: str | None = None
+    run_id: str | None = None
+    run_url: str | None = None
+    detail: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EnforcementCandidate:
+    """What a CI file actually checks, including the run set it checks it against."""
+
+    metric: str
+    file: str
+    enforced: bool = True
+    partial: bool = False
+    partial_note: str | None = None
+    threshold: float | None = None
+    comparator: str | None = None
+    scope: str = "all_runs"
+    line: int | None = None
+    unit: str | None = None
+    workflow: str | None = None
+    known_failing: bool = False
+
+
+class SourceAdapter(Protocol):
+    """Every adapter is `(config, bytes or documents) -> ImportReport`.
+
+    Narrow on purpose. An adapter that could reach the database could also reach another
+    tenant's rows, and one that took a `product` could branch on which product it was —
+    the thing agnosticism rule R2 forbids.
+    """
+
+    role: str
+
+    def read(self, *args: Any, **kwargs: Any) -> ImportReport: ...
