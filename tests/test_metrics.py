@@ -280,6 +280,151 @@ class TestTierThreeIsARefusal:
 
 # -- against real run records ---------------------------------------------------
 
+class TestThePerCaseLayer:
+    """PRD AC-22 and AC-26. The rows that make a finding provable.
+
+    The load-bearing property is that the cases reproduce the number they are evidence
+    for. If `passed` and `total` could disagree with the stored outcomes, a finding
+    would cite cases that do not add up to its own claim, which is worse than citing
+    none.
+    """
+
+    ROWS = {"results": [
+        {"id": "1", "escalate": True, "labelled_escalate": "true", "message": "a"},
+        {"id": "2", "escalate": False, "labelled_escalate": "true", "message": "b"},
+        {"id": "3", "escalate": False, "labelled_escalate": "false", "message": "c"},
+        {"id": "4", "escalate": True, "labelled_escalate": "false", "message": "d"},
+    ]}
+    RECALL = {
+        "metric": "escalation_recall", "kind": "recall",
+        "actual": "escalate", "expected": "labelled_escalate",
+        "coerce": {"labelled_escalate": "bool"}, "input_field": "message",
+    }
+
+    def test_the_cases_reproduce_the_metrics_own_counts(self):
+        value = compute(self.ROWS, self.RECALL)
+        counted = value.counted_cases
+        assert sum(1 for c in counted if c.outcome == "pass") == value.passed
+        assert len(counted) == value.total
+
+    def test_a_case_outside_the_denominator_is_skipped_not_failed(self):
+        """Row 3 is a true negative: the run exercised it and recall does not measure
+        it. Calling that a failure would invent a breach; dropping it would leave the
+        run only partly accounted for."""
+        value = compute(self.ROWS, self.RECALL)
+        by_id = {c.case_id: c.outcome for c in value.cases}
+        assert by_id == {"1": "pass", "2": "fail", "3": "skipped", "4": "skipped"}
+
+    def test_the_same_rows_under_precision_move_the_denominator(self):
+        """The same run, a different metric, different cases counted. A false positive
+        is in precision's denominator and outside recall's, which is why the outcome is
+        a property of the metric rather than of the row."""
+        value = compute(self.ROWS, {**self.RECALL, "kind": "precision",
+                                    "metric": "escalation_precision"})
+        by_id = {c.case_id: c.outcome for c in value.cases}
+        assert by_id == {"1": "pass", "2": "skipped", "3": "skipped", "4": "fail"}
+        assert len(value.counted_cases) == value.total
+
+    @pytest.mark.ac("AC-26")
+    def test_an_input_is_kept_only_for_a_case_that_failed(self):
+        value = compute(self.ROWS, self.RECALL)
+        stored = {c.case_id: c.input_redacted for c in value.cases}
+        assert stored["2"] == "b"
+        assert stored["1"] is None, "a passing case kept its input"
+        assert stored["3"] is None and stored["4"] is None, "a skipped case kept its input"
+
+    @pytest.mark.ac("AC-25")
+    def test_an_input_is_redacted_at_extraction_not_at_storage(self):
+        """The field is named for what it holds and nothing puts raw text into it, so a
+        customer's own words never reach a candidate object or a traceback."""
+        rows = {"results": [
+            {"id": "1", "escalate": False, "labelled_escalate": "true",
+             "message": "ring me on 07700 900123"},
+        ]}
+        value = compute(rows, self.RECALL)
+        case = value.cases[0]
+        assert case.input_redacted == "ring me on [phone]"
+
+    def test_an_input_field_nobody_declared_stores_nothing(self):
+        """There is no default field name, unlike `id_field` and `rows`. Guessing which
+        field holds the customer's words would be the one default here whose failure
+        mode is retaining personal data nobody asked for. The third fixture's per-case
+        rows carry no text at all."""
+        value = compute(self.ROWS, {k: v for k, v in self.RECALL.items()
+                                    if k != "input_field"})
+        assert all(c.input_redacted is None for c in value.cases)
+
+    def test_a_trace_pointer_is_carried_where_the_source_has_one(self):
+        """Copied at observation time because the source will delete the body. The
+        pointer and the outcome are what let the Layer say the body is gone while still
+        showing what happened (AC-23)."""
+        rows = {"results": [
+            {"id": "1", "escalate": False, "labelled_escalate": "true",
+             "trace_id": "t-1", "trace_url": "https://traces.example/t-1"},
+        ]}
+        case = compute(rows, self.RECALL).cases[0]
+        assert (case.trace_id, case.trace_url) == ("t-1", "https://traces.example/t-1")
+
+    def test_a_source_with_no_tracing_carries_none_rather_than_a_dead_url(self):
+        case = compute(self.ROWS, self.RECALL).cases[0]
+        assert (case.trace_id, case.trace_url) == (None, None)
+
+    def test_a_row_with_no_id_gets_a_marked_positional_one(self):
+        """It cannot be dropped: the counts are what drift detection reads, and a
+        missing row would make the stored evidence disagree with `runs_total`. The `#`
+        says plainly that the reference is positional."""
+        rows = {"results": [{"escalate": False, "labelled_escalate": "true"}]}
+        case = compute(rows, self.RECALL).cases[0]
+        assert case.case_id == "#1"
+
+    def test_the_source_recording_an_error_is_distinguished_from_a_failure(self):
+        """Different things to a human triaging the run: one is the product being
+        wrong, the other is the harness not having run."""
+        rows = {"results": [
+            {"id": "1", "escalate": False, "labelled_escalate": "true",
+             "problem": "bad json"},
+        ]}
+        value = compute(rows, {**self.RECALL, "error_field": "problem"})
+        assert value.cases[0].outcome == "error"
+        assert len(value.counted_cases) == value.total, "an error left the denominator"
+
+    def test_an_error_field_never_overrides_a_pass(self):
+        """The metric counted that row as passing. Relabelling it here would make the
+        stored cases disagree with the number they are the evidence for."""
+        rows = {"results": [
+            {"id": "1", "escalate": True, "labelled_escalate": "true",
+             "problem": "something odd"},
+        ]}
+        value = compute(rows, {**self.RECALL, "error_field": "problem"})
+        assert value.cases[0].outcome == "pass"
+
+    def test_a_subset_metric_stores_the_subset_and_not_the_whole_run(self):
+        """The filter defines the population. A metric on the critical cases is
+        evidence about the critical cases; the rest of the run belongs to whichever
+        metric measures it."""
+        rows = {"results": [
+            {"id": "1", "status": "ok", "expected_status": "ok", "critical": "C1"},
+            {"id": "2", "status": "ok", "expected_status": "blocked", "critical": "C3"},
+            {"id": "3", "status": "ok", "expected_status": "blocked", "critical": ""},
+        ]}
+        value = compute(rows, {
+            "metric": "critical_pass_rate", "kind": "accuracy",
+            "actual": "status", "expected": "expected_status",
+            "filter": {"field": "critical", "op": "is_present"},
+        })
+        assert [c.case_id for c in value.cases] == ["1", "2"]
+        assert len(value.counted_cases) == value.total == 2
+
+    def test_an_aggregation_with_no_per_case_notion_of_passing_emits_no_cases(self):
+        """A case does not pass or fail a p95. Emitting `skipped` for every row would
+        store a row per case asserting nothing, and tier 1 has no rows at all."""
+        rows = {"results": [{"id": "1", "ms": 900}, {"id": "2", "ms": 1200}]}
+        p95 = compute(rows, {"metric": "p95", "kind": "percentile", "field": "ms", "p": 95})
+        mean = compute(rows, {"metric": "avg", "kind": "mean", "field": "ms"})
+        read = compute({"score": 0.9}, {"metric": "s", "kind": "read", "pointer": "/score"})
+        assert p95.cases == () and mean.cases == () and read.cases == ()
+
+
 @pytest.mark.skipif(not FIXTURE_RUNS.exists(), reason="fixture repository not present")
 class TestAgainstFixtureRuns:
     """The definitions a human would write at onboarding, checked against numbers that
@@ -316,6 +461,58 @@ class TestAgainstFixtureRuns:
         assert recall.value < 0.99, "this run is supposed to breach a 99% bar"
         assert recall.detail["fn"] >= 1
         assert recall.detail["missed_ids"]
+
+    @pytest.mark.ac("AC-22")
+    def test_every_committed_run_has_cases_that_add_up_to_its_own_number(self):
+        """The invariant across the whole committed history, not one hand-picked run.
+
+        94 metric-run pairs. If the cases could disagree with `passed` and `total`, a
+        drift finding would cite evidence that does not add up to its own claim — which
+        is worse than citing none, and is why AC-22 is worth a sweep rather than a
+        sample."""
+        definitions = [
+            {"metric": "escalation_recall", "kind": "recall",
+             "actual": "escalate", "expected": "labelled_escalate",
+             "coerce": {"labelled_escalate": "bool"}, "input_field": "message"},
+            {"metric": "team_accuracy", "kind": "accuracy",
+             "actual": "team", "expected": "labelled_team", "input_field": "message"},
+        ]
+        checked = 0
+        for path in sorted((FIXTURE_RUNS / "triage" / "runs").glob("*.json")):
+            document = json.loads(path.read_text())
+            if not isinstance(document, dict):
+                continue  # `v1.json`, the file that is not a run record
+            for definition in definitions:
+                value = compute(document, definition)
+                if not value.measurable:
+                    continue
+                checked += 1
+                counted = value.counted_cases
+                passes = sum(1 for case in counted if case.outcome == "pass")
+                assert (passes, len(counted)) == (value.passed, value.total), (
+                    f"{path.name} {definition['metric']}: cases say "
+                    f"{passes}/{len(counted)}, the metric says "
+                    f"{value.passed}/{value.total}"
+                )
+                assert not [
+                    case for case in value.cases
+                    if case.input_redacted and case.outcome not in ("fail", "error")
+                ], f"{path.name} {definition['metric']} stored an input it should not"
+        assert checked > 80, f"only {checked} metric-run pairs checked"
+
+    @pytest.mark.ac("AC-22")
+    def test_the_breaching_run_names_the_case_that_missed(self):
+        """Condition 1 at case level: the run that a latest-only gate never sees, and
+        the single case inside it that is the proof. PROGRESS records this as case 14."""
+        doc = self._run("triage/runs/20260915-133223Z-v2.json")
+        value = compute(doc, {
+            "metric": "escalation_recall", "kind": "recall",
+            "actual": "escalate", "expected": "labelled_escalate",
+            "coerce": {"labelled_escalate": "bool"}, "input_field": "message",
+        })
+        failing = [case for case in value.cases if case.outcome == "fail"]
+        assert [case.case_id for case in failing] == ["14"]
+        assert failing[0].input_redacted, "the failing case carries no input to show"
 
     def test_a_rag_run_yields_a_subset_metric_distinct_from_its_headline(self):
         """Condition 2's shape: a headline and a subset measured from one file, where

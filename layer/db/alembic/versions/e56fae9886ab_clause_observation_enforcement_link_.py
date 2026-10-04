@@ -252,7 +252,7 @@ def downgrade() -> None:
     new_tables = ('clause', 'clause_identity', 'observation', 'enforcement_fact', 'entity', 'proposal', 'link', 'audit_event')
     role = rls.app_role_from_url(settings.database_url)
     for statement in (
-        rls.drop_append_only_statements(("audit_event",))
+        rls.drop_append_only_statements(("audit_event",), drop_function=True)
         + rls.revoke_statements(role, new_tables)
         + rls.disable_statements(new_tables)
     ):

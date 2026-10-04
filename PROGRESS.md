@@ -8,6 +8,15 @@ and the stdio MCP server. That is the whole read half, usable from a terminal wi
 no agent and no Dust. What follows phase 3 is **not** the handoff's order any more — see
 "Beyond phase 3" at the end of this file.
 
+**The specification was revised on 3 October, after step 8, and it reopened finished
+work.** Steps 4 to 8 were complete against the specification as it then stood. They are
+not complete against the specification as it stands now. What changed and what it costs
+is in "The 3 October revision" below; the step table marks each affected step rather than
+leaving a reader to infer it from a date. Nothing already built turned out to be wrong —
+the additions sit beneath and beside it — but a step whose scope grew is not a step that
+is still done, and recording it as done would be the quiet kind of false report this
+product exists to catch.
+
 **How to read the status column.** A step is `done` only when its tests pass and the
 result has been quoted, never when the code merely exists. Each finished step below records
 what it had to achieve, **a table of every file it added or modified and why**, how it was
@@ -20,32 +29,120 @@ searching for it.
 | 1 | Branch, venv, pytest, Alembic scaffolding, spec docs committed | **done** |
 | 2 | Migration 1: `org`, `product`, `source`, `binding`, RLS, roles, isolation tests | **done** |
 | 3 | `refs` registry and resolvers; the `repo` source with revision pinning | **done** |
-| 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done** |
-| 5 | The metric engine, tiers 1 to 3 | **done** |
-| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **done** |
-| 7 | The onboarding state machine and CLI; onboard all three fixtures | **done** |
-| 8 | The five finding queries; reproduce all three C1 conditions | **done** |
-| 9 | The stdio MCP server | next |
-| 10 | The agnosticism grep test, the no-causal-language test, the AC matrix | not started |
+| 4 | Migration 2: `clause`, `clause_identity`, `observation`, `enforcement_fact`, `link`, `entity`, `proposal`, `audit_event` | **done**, extended by step 9 |
+| 5 | The metric engine, tiers 1 to 3 | **done**, extended by step 10 |
+| 6 | Adapters: spec, then eval (run files, then Langfuse), then code | **done**; 6b reopened by step 10 |
+| 7 | The onboarding state machine and CLI; onboard all three fixtures | **done**; backfill reopened by step 10 |
+| 8 | The five finding queries; reproduce all three C1 conditions | **done**; drift reopened by step 10 |
+| 9 | Migration 5: `case_result`, the freshness columns, `harvest_cap` | **done** |
+| 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **in progress** |
+| 11 | Freshness: a verdict degrades rather than freezing | not started |
+| 12 | The stdio MCP server, to PRD B11 | not started |
+| 13 | The agnosticism grep test, the AC matrix, the user-story tests | not started |
 
-**Coverage, taken from the test markers rather than from prose.**
+Steps 9 to 13 replace what was step 9 and step 10. The MCP server moved behind the
+evidence spine because B11 is the specification for that server and its `failing_cases`
+tool cannot be built over data the store does not hold — building it first would mean
+writing the tool twice.
+
+**Coverage, taken from the test markers rather than from prose.** The matrix is 36
+criteria now, not 21: the revision added AC-22 to AC-36.
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21 |
+| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-25, AC-26, AC-27 |
+| Criteria with tests that do **not** yet meet them | AC-22 and AC-23 are proven at the schema and the engine, and not end to end: nothing yet stores a case row or cites one in a finding. AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists |
 | Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
-| User stories | **none yet.** AC-11 asks for a test per US-1 to US-12 criterion and the `story` marker is unused. Step 10's job |
+| User stories | **none yet.** AC-11 asks for a test per US-1 to US-13 criterion and the `story` marker is unused. Step 13's job |
+
+The second row is the one to read. A marker says a criterion has a test; it does not say
+the criterion is met. AC-22 asks that every drift finding with `runs_missed > 0` carry a
+non-empty `failing_cases`, and no finding carries one yet.
 
 **AC-3, AC-4 and AC-5 are the demo, and they pass.** PRD C2 requires them to do so "with no
 UI and no agent, from committed data alone, and against at least two independently onboarded
 products" — both reference products are onboarded from their own sources in
 `tests/test_findings.py`.
 
-Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10 to
-AC-12 (step 10), AC-16 (phase 5).
+Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10
+to AC-12 (step 13), AC-16 (phase 5), AC-22 and AC-24 (step 10), AC-28 to AC-30 (step 11),
+AC-31 and AC-32 (step 12), AC-34 to AC-36 (phase 5, with US-1's harvest).
 
-**Tests:** 312 passing. **Commits:** 21 on `layer-phase-1-3`. **Migrations:** 4.
+**Tests:** 363 passing. **Migrations:** 5. **Commits:** 26 on `layer-phase-1-3` ahead of
+`main`, all pushed. **Steps 9 and 10 are uncommitted working-tree changes** — 11 modified
+files and 6 new ones — so a reader cloning the branch sees the file tables below for steps
+1 to 8 and nothing for 9 or 10.
+
+---
+
+## The 3 October revision, and what it reopened
+
+Recorded 4 Oct 2026, after reconciling the build against the revised `PRD-SPEC.md` and
+`HANDOFF.md` rather than against recollection. The reconciliation itself is worth keeping:
+`pytest` reported 312 passing and every step below was accurate, so nothing was wrong — and
+the build had nonetheless stopped matching the specification.
+
+**Four additions, two of which land inside finished steps.**
+
+| | What it adds | Where it is specified |
+|---|---|---|
+| 1 | **The evidence spine.** A `case_result` row per case per run, so a finding can name the cases that are its proof | PRD B2 and "the evidence spine", B3 rules 10–11, B5 items 8–9, US-13, AC-22 to AC-27, three new B6 metrics; handoff §4, §6, §12 |
+| 2 | **Freshness.** A stale measurement must never read as a current one | PRD B2 and "silence must be visible in the answer", B3 rule 12, B5 item 10, AC-28 to AC-30, two new B6 metrics; handoff §6, audit item P11 |
+| 3 | **B11, the tool surface**, with the approval boundary inside the server | PRD B11, AC-31, AC-32; handoff §6 |
+| 4 | **US-1's harvest ranking.** `harvest_cap`, a written ranking rule, retained clusters | PRD US-1, AC-33 to AC-36, `harvested_case_yield`; handoff §3 |
+
+Item 1 reopens steps 4, 5, 6b, 7 and 8. Item 2 reopens 4 and 8 and adds behaviour to the
+verdict rule. Item 3 redefines the MCP server before it was written, and adds one thing
+easy to miss: **`confirm_binding` must be human-only for the same reason `accept_proposal`
+is**, because an agent able to confirm its own binding can manufacture the precondition B3
+rule 8 requires and then propose freely. Item 4 needs one column now and nothing else until
+phase 5.
+
+**The one correction to the record here.** Step 8 reported condition 1 as reproduced, and
+it is — but it names its failing cases out of `observation.detail["missed_ids"]`, a JSONB
+blob with no outcome, no trace pointer and nothing a citation can resolve to. Against the
+revised AC-22 that is half an answer. The sentence in step 8's summary is still true; what
+changed is that the specification now asks for more than a sentence.
+
+### Two things the revision asks for that the fixtures cannot give
+
+Both are recorded here rather than worked around quietly, because each is a place where the
+specification and the only real data available to test it disagree.
+
+**AC-26 cannot be met as literally written.** It requires `input_redacted` to be non-null on
+every failing row. The third fixture's per-case rows carry a reference, a prediction, a
+label and a duration — **no text at all**. A CHECK demanding text there makes an honest
+source unstorable, and writing a placeholder would be fabricated evidence, which B5 ranks
+fourth among unacceptable failures. So the database enforces the half that is a privacy
+guarantee — an input may exist only for a case that failed or errored — and "this source
+declares no input" is reported as `not_applicable`, which is exactly the answer AC-24
+already requires for a source with no tracing. **This wants a deliberate amendment to AC-26
+rather than silent divergence in the code.**
+
+**AC-25's "proven by test over the fixture corpora" proves nothing.** 876 input fields
+across both reference products contain no email, phone, card, sort code, postcode, IBAN or
+National Insurance number: their authors wrote clean synthetic text, so that test passes
+whether the redactor works or not. The non-circular test is a corpus written to contain each
+shape, with the forbidden strings listed by hand so the assertion does not share its
+patterns with the code it checks — `tests/fixtures/pii_corpus.json`, the same technique as
+`alien_spec.md` in step 6a. The sweep over the reference corpora is kept, labelled as the
+weaker regression guard it is.
+
+### Two corrections made to the specification documents themselves
+
+Both found by the reconciliation, both inside the uncommitted edits, both recorded in the
+PRD's Part D3 as item 8 so the change is auditable rather than silent.
+
+- **AC-10 read "every H1 to H12 case has a test"** while B8's hard-case table runs to
+  **H16**. AC-11 was brought up to US-13 in the revision and AC-10 was not, so H13 to H16
+  carried no criterion requiring a test — three of which the suite already covers.
+- **The handoff's stack table routed observations and case results to ClickHouse or
+  Timescale**, which reads as a settled dependency and contradicts the standing decision to
+  stay on Postgres behind an `ObservationStore` interface. The arithmetic the revision itself
+  added settles it: ten products under a million rows a year, and AC-27's partitioning is
+  ordinary Postgres. The columnar move is named as open question 1 rather than a decision
+  already taken.
 
 ---
 
@@ -1031,33 +1128,207 @@ intent, because B3 rule 6 is about what a reader is told.
 
 ---
 
+## Step 9 — Migration 5: the evidence spine and the freshness columns. Done.
+
+**What it had to achieve.** Somewhere to put the proof, and somewhere to record how old the
+proof is, with isolation, immutability and partitioning arriving alongside the table rather
+than after it.
+
+**Files.** Uncommitted.
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/db/models.py` | modified | `CaseResult`; `SOURCE_STATUSES` and `CASE_OUTCOMES`; `Source.freshness_window`, `overdue_since` and a CHECKed `status`; `Product.harvest_cap`. `TENANT_TABLES` grows to 12 |
+| `layer/db/partitions.py` | added | The partition statements, emitted rather than executed, for the same reason `rls.py` emits rather than executes: a migration stays declarative and the same statements can be asserted in a test |
+| `layer/db/alembic/versions/c4e8b1a07f55_*.py` | added | Migration 5. Hand-written DDL rather than `op.create_table`, because the partitioning clause, the two partition levels and the composite key have to arrive together |
+| `layer/db/rls.py` | modified | `case_result` joins `audit_event` in `APPEND_ONLY_TABLES`, and `drop_append_only_statements` gains a required `drop_function` argument — see the defect below |
+| `layer/db/alembic/versions/e56fae9886ab_*.py` | modified | Migration 2 now says `drop_function=True`, because it is the migration that created the function |
+| `layer/core/durations.py` | added | `30d` to a `timedelta` and back. A window is typed by a human at onboarding, so it has to be writable on a command line |
+| `layer/core/errors.py` | modified | `Unreadable`, so an operator's bad input reaches them as `refused:` rather than as a traceback, while a `ValueError` escaping stays what it should be — a defect |
+| `layer/onboarding/state.py` | modified | `bind_source` takes `freshness_window`, which is PRD B11's signature for it, and records it in the audit detail |
+| `layer/cli.py` | modified | `source bind --freshness`, and it prints the consequence either way |
+| `tests/test_schema_guarantees.py` | modified | 19 tests: 11 on `case_result` (AC-26, AC-27, AC-22's immutability, AC-23's storage), 6 on the freshness CHECKs, 2 on `harvest_cap`, plus `case_result` added to the cross-tenant sweep |
+| `tests/test_cli.py` | modified | Three tests over the operator surface of a freshness window |
+
+**Why `case_result` is partitioned the way it is.** AC-27 asks for partitioning by `org_id`
+**and** month. `LIST (org_id)` at the top would give the cheapest possible erasure — one
+`DROP TABLE` per tenant — but it needs DDL every time a tenant is registered, and the
+application role deliberately does not own these tables, so registering a tenant would
+become a migration. Monthly `RANGE` partitions, each `HASH` split on `org_id`, keep
+registration pure DML, keep a tenant delete to one statement, and still allow an expired
+month to be dropped whole.
+
+**The DEFAULT partition is not laziness.** The application role cannot create a partition,
+so a run whose `measured_at` falls outside every declared month has nowhere to go and
+Postgres rejects the insert. Losing a run because a maintenance job did not run is worse
+than a partition holding mixed months, and AC-2 forbids omitting a run.
+
+**What the numbers cost, measured rather than assumed.** The first version declared 24
+months at a hash modulus of 4: **126 relations**, and `TRUNCATE org CASCADE` — which the
+harness runs after every test — went from roughly 20ms to **125ms**, about 40 seconds
+across the suite. Six months at a modulus of 2 is 22 relations and 36ms, and answers exactly
+the same questions, because per-tenant volume follows eval suite size rather than traffic.
+Both numbers are tuning, not correctness, and both are recorded where they are set.
+
+**Postgres 17 was asked rather than recalled.** Before the migration was written, a throwaway
+transaction confirmed that a partitioned table accepts `FORCE ROW LEVEL SECURITY`, a policy,
+a row-level `BEFORE UPDATE OR DELETE` trigger **and** a statement-level `BEFORE TRUNCATE`
+trigger, and that hash subpartitioning under a range parent works with a `DEFAULT`. It also
+surfaced the constraint that shaped the key: **a unique constraint on a partitioned table
+must contain the partition keys**, so B2's `UNIQUE (org_id, observation_id, case_id)` carries
+`measured_at` too. That stays idempotent only because `measured_at` is the observation's own
+time rather than the clock's — one run has one time — and it is why there is no surrogate id:
+a primary key must contain the partition keys, so the composite key *is* the identity and a
+case is cited as `case:<observation_id>/<case_id>`.
+
+**A defect the downgrade caught, and it is the same defect twice.** `drop_append_only_statements`
+ended with `DROP FUNCTION IF EXISTS layer_append_only()`, which was right while `audit_event`
+was the only append-only table. With two, migration 5's downgrade tried to drop a function
+`audit_event`'s triggers still depend on, failed, and rolled the whole downgrade back. This is
+the same shape as the defect step 4 recorded — a helper whose convenient default stops being
+correct once a second caller exists — so the argument is now required and has no default, and
+each migration states whether it owns the function. Found by running the downgrade rather than
+by reading it.
+
+**Verification.**
+
+```
+$ .venv/bin/alembic downgrade base && .venv/bin/alembic upgrade head
+$ .venv/bin/python -m pytest tests/test_schema_guarantees.py
+...........................................                              [100%]
+43 passed in 2.18s
+```
+
+A full downgrade to base leaves only `alembic_version`, with the trigger function gone.
+Covering: an input on a passing or skipped case refused; every outcome in the vocabulary
+storable and a fifth refused; the same case twice refused; a case unable to be edited or
+deleted after it was cited; a trace pointer surviving its body; rows routing to two
+different monthly partitions, asserted against where the row actually landed rather than
+against the DDL issued; an undeclared month landing in `DEFAULT`; a tenant-scoped delete
+clearing every partition and sparing the other tenant; and the four freshness CHECKs,
+including that a source cannot be `overdue` against a window nobody set.
+
+---
+
+## Step 10 — The evidence spine through the pipeline. In progress.
+
+**What it has to achieve.** Carry a case from the run file that recorded it to the finding
+that cites it, redacted on the way in and resolvable on the way out.
+
+**Done so far.**
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/core/redact.py` | added | Masking by shape, labelled — `[email]`, not asterisks, because a human triaging a failing case needs to know an email was there to read the input at all. Reimplemented rather than imported from `chatbot-lab`, for the same reason `verdicts/stats.py` is: a fixture is test data and may never be a dependency |
+| `tests/fixtures/pii_corpus.json` | added | Not a product fixture: a corpus written to contain each shape the redactor claims, because the reference corpora contain none. Each case carries the literal strings that must not survive, written by hand so the assertion does not share its patterns with the code under test |
+| `tests/test_redaction.py` | added | 14 tests, including one that fails when a pattern is added to the module with no example beside it, and one that documents the limit rather than claiming a capability |
+| `layer/metrics/engine.py` | modified | `CaseOutcome`, and per-case outcomes from `rate`, `accuracy`, `recall` and `precision`. Tier 1, `count`, `mean` and `percentile` emit none |
+| `tests/test_metrics.py` | modified | 15 tests: 13 on the per-case layer, plus the two fixture checks — a sweep over 94 metric-run pairs in the committed history, and the single case inside the breaching run that is condition 1's proof |
+
+**The load-bearing property is that the cases reproduce the number they are evidence for.**
+`passed` equals the number of passing cases and `total` equals the number of counted ones,
+across every metric and every committed run — 94 metric-run pairs, asserted in a sweep
+rather than on a sampled run. If those could disagree, a finding would cite evidence that
+does not add up to its own claim, which is worse than citing none.
+
+**`skipped` is a third thing, and it is why the invariant needs stating.** A true negative is
+in neither recall's denominator nor precision's: the run exercised the case and this metric
+does not measure it. Calling that a failure would invent a breach; dropping it would leave
+the run only partly accounted for. So it is stored and excluded from the arithmetic, and the
+same row is `fail` under one metric and `skipped` under another — an outcome is a property of
+the metric, not of the row.
+
+**Two defaults that are deliberately asymmetric.** `id_field` defaults to `id` and
+`trace_id_field` to `trace_id`, because a wrong guess there costs a missing pointer.
+`input_field` has **no default at all**: guessing which field holds the customer's own words
+and storing it would be the one default in this codebase whose failure mode is retaining
+other people's personal data that nobody asked for.
+
+**A privacy defect found by printing output, not by a test.** The rule was first written as
+the specification words it — an input "only where `outcome` is not `pass`" — which stored the
+text of every `skipped` case: **nine of fourteen cases per run** for one fixture's recall
+metric, including a bereavement and a financial-distress disclosure, for cases that metric
+never measured. The reasoning behind the rule is that nobody asks to see the input of a case
+that passed, and nobody asks to see the input of a case that was not measured either. The
+rule is now `input_redacted IS NULL OR outcome IN ('fail', 'error')`, enforced by the CHECK as
+well as by the engine, and it broke one of step 9's own tests when it landed, which is the
+test doing its job.
+
+**Still to do in this step.** `ObservationCandidate.cases` and the report arithmetic in
+`layer/adapters/base.py`; lifting case ids, inputs and trace pointers in
+`layer/adapters/eval/run_files.py`; mapping the pointers Langfuse already carries; writing
+and reconciling the rows in `layer/onboarding/persist.py`; a `case` ref kind and its resolver;
+and `failing_cases[]` on the drift finding. Until the last of those exists, **AC-22 and AC-24
+are not met** — the engine produces the evidence and nothing stores or cites it.
+
+**Verification so far.**
+
+```
+$ .venv/bin/python -m pytest
+........................................................................ [ 99%]
+...                                                                      [100%]
+363 passed in 50.91s
+```
+
+51 tests added since step 8's 312: 19 on the schema, 3 on the operator surface of a
+freshness window, 14 on redaction and 15 on the per-case layer.
+
+---
+
 ## Next
 
-Step 9, the stdio MCP server. The five queries plus `list_clauses`, `get_clause`,
-`trace_chain`, `metric_history` and `record_observation`, wrapped as tools and driven from a
-terminal — which is PRD A6's bar: "the Layer is fully usable over stdio from a terminal with
-no Dust at all, and every acceptance criterion in Part C must pass that way".
+**Finish step 10**, in the order the data flows: `ObservationCandidate.cases` and the report
+arithmetic, the eval adapter lifting case ids, inputs and trace pointers, the Langfuse
+pointers it already carries, the rows written and reconciled in `persist.py`, a `case` ref
+kind and its resolver, and `failing_cases[]` on the drift finding. The last of those is what
+makes AC-22 and AC-24 true rather than partly true.
+
+**Step 11, freshness.** The columns exist and nothing reads them. `judge()` takes the
+source's window and the clock, `met` and `missed` degrade to `cannot_confirm` outside it with
+the age named, `as_of` and `stale` go on the finding, `stale_sources` on the answer, and the
+global `STALE_AFTER = timedelta(days=30)` at `layer/findings/queries.py:48` retires in favour
+of the per-source window. The governing sentence is PRD B2's: **an absent measurement is not a
+passing one**, and the governing behaviour is to degrade rather than freeze.
+
+**Step 12, the stdio MCP server, to PRD B11.** The full read tier including `list_products`,
+`get_product`, `source_status`, `failing_cases` and `trace_chain`, and the write tier including
+`record_case_results` and `propose_binding`. PRD A6's bar is "fully usable over stdio from a
+terminal with no Dust at all, and every acceptance criterion in Part C must pass that way".
 
 `mcp` 2.2.0 is already installed and its surface verified in step 1: `MCPServer` from
 `mcp.server.mcpserver`, tools via a `@server.tool()` decorator, transport an argument to
-`run()`. `accept_proposal` and `reject_proposal` are never exposed, in any phase.
+`run()`. The human-only tier — `register_product`, `bind_source`, **`confirm_binding`**,
+`reject_binding`, `accept_proposal`, `reject_proposal` — is absent from the module rather than
+merely undecorated, in any phase. AC-31 tests that against the served tool list, because a
+boundary that holds only while nobody adds a decorator is not a boundary.
 
 `trace_chain` is the one piece of new query work — a recursive CTE over `link`. It will return
 mostly gaps until phase 6 binds the sources that fill the chain, and naming each gap is the
 required behaviour rather than a shortfall (US-5: "where a link in the expected chain is
 absent, the Layer shall name the gap rather than omitting it").
 
-Then step 10: the agnosticism grep test, and the AC matrix that closes AC-10 to AC-12 —
-including the user-story tests that nothing covers yet.
+**Step 13**: the agnosticism grep test, and the AC matrix that closes AC-10 to AC-12 across
+36 criteria — including the user-story tests that nothing covers yet, and a statement of which
+criteria belong to phases 5 to 7 rather than reporting them as failures.
+
+**And the three documents that still describe the pre-revision build.** `CLAUDE.md` is stale
+in three ways: it says `README.md` documents EarlyEcho, when `README.md` was rewritten for the
+Layer in `de21e88`; its closed-set list omits `source.status`, which PRD B2 has just closed;
+and its hard constraints predate B3 rules 10 to 12 and the `confirm_binding` rule. `README.md`
+says "All 12 tables" and "Three of the five findings". Both are step 13's tail, not optional.
 
 ---
 
 # Beyond phase 3 — the order changed, and why
 
-Recorded 1 Oct 2026. The handoff's build order runs phase 4 (HTTP, a token, Dust as a
-client) before phase 5 (the write half). **That is reversed here.** The reasoning is below
-so it is not re-argued, and so that a reader who knows the handoff can see where this
+Recorded 1 Oct 2026, revised 4 Oct. The handoff's build order runs phase 4 (HTTP, a token,
+Dust as a client) before phase 5 (the write half). **That is reversed here.** The reasoning is
+below so it is not re-argued, and so that a reader who knows the handoff can see where this
 departs from it.
+
+**One of the two open questions behind the phase 4 spike has since been answered**, which
+makes the spike smaller rather than unnecessary. See the amended note under "Phase 4 becomes
+a half-day spike".
 
 ## Open items created during the build
 
@@ -1073,6 +1344,16 @@ departs from it.
    interface is shaped so the pass can be added above the deterministic one without moving
    anything, and it must stay above it: EC-10 requires failing closed, which a
    non-deterministic importer makes hard to reason about.
+3. **`AC-26` and `AC-25` both need the specification amended rather than the code bent**, per
+   "The 3 October revision" above. AC-26 asks for an input on every failing row, which a
+   source carrying no text cannot give; AC-25 asks for proof over corpora that contain no PII
+   to find. The code takes the honest reading in both cases and the criteria have not been
+   changed to match.
+4. **`layer/db/partitions.py` declares six months and nothing extends them.** Anything outside
+   lands in the `DEFAULT` partition, which is correct rather than broken, but declaring a new
+   month is DDL by the table owner and there is no maintenance command for it yet. It becomes
+   real the first time a scheduled pull runs unattended, which is the same phase as audit item
+   P11's alerting.
 
 ---
 
@@ -1112,10 +1393,22 @@ must be known **before a UI is built around them**. That is AC-16."*
 
 ## Phase 4 becomes a half-day spike, not a deferral
 
-Open questions 1 and 2 cannot be answered by reasoning, only by trying. At the phase-3
-boundary: put the server behind HTTP with a throwaway token, register it in hosted Dust as
-a remote MCP server, record the plan tier and the accepted auth scheme in this file, and
-stop. That de-risks phase 4 without reordering the real work.
+**Open question 1 is answered, and the answer changes nothing structural.** Hosted Dust gates
+remote MCP servers behind a paid plan tier. That blocks nothing, because phases 1 to 3 contain
+no Dust and PRD A6 requires every criterion in Part C to pass over stdio — and the free test
+harness for stdio is Claude Code or Claude Desktop, neither of which has a plan tier or needs
+HTTP. Paying for Dust becomes a decision only when multiplayer and scheduled triggers are
+wanted, which is phase 4, and the recorded free alternatives are self-hosted Dust under MIT,
+or LibreChat and Open WebUI without the durable agent loop.
+
+**Open question 2 is still open and is now the only Dust question that matters**: what auth
+scheme its credential policy accepts for a remote MCP server. It cannot be answered by
+reasoning, only by trying.
+
+So the spike shrinks rather than disappearing. At the phase-3 boundary: put the server behind
+HTTP with a throwaway token, register it in hosted Dust as a remote MCP server, record the
+accepted auth scheme in this file, and stop. That de-risks phase 4 without reordering the real
+work.
 
 ## Three things phase 5 needs that the plan does not yet carry
 

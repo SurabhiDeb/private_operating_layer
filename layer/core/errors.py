@@ -30,6 +30,16 @@ class NotLive(LayerError):
     """B3 rule 8: nothing is proposed for a product without a confirmed binding."""
 
 
+class Unreadable(LayerError):
+    """An operator wrote something the Layer will not guess at.
+
+    Separate from a Python `ValueError` on purpose: this is a refusal the operator is
+    meant to read and correct, so it reaches them as `refused: ...` on stderr rather
+    than as a traceback, while a `ValueError` escaping remains what it should be — a
+    defect.
+    """
+
+
 @dataclass(frozen=True)
 class Refusal:
     """A stated refusal, naming what is missing. Never an empty result."""

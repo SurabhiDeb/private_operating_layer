@@ -1,4 +1,4 @@
-"""What the schema itself refuses. AC-2, AC-9, AC-13, EC-9, H2, H5, H16, P5, P6.
+"""What the schema itself refuses. AC-2, AC-9, AC-13, AC-26, AC-27, EC-9, H2, H5, H16, P5, P6.
 
 These are deliberately database tests rather than application tests. Each one asserts
 a rule the Layer must not be able to break even by mistake, and a rule enforced only
@@ -17,10 +17,12 @@ from sqlalchemy.exc import DataError, IntegrityError, InternalError, Programming
 from layer.core.db import org_session
 from layer.db.models import (
     AuditEvent,
+    CaseResult,
     Clause,
     EnforcementFact,
     Observation,
     Proposal,
+    Source,
 )
 
 from conftest import make_org, make_product
@@ -351,6 +353,307 @@ class TestEnforcementFact:
                 ))
 
 
+
+
+class TestCaseResultIsTheProof:
+    """PRD AC-26 and AC-27, and the evidence spine's own rules.
+
+    An aggregate cannot be evidence, so these rows are what a drift finding cites. The
+    schema has to refuse the two ways they could stop being proof: text stored for a
+    case nobody will ask about, and a row that can be edited after it was cited.
+    """
+
+    def _case(self, org, observation_id, **kw) -> CaseResult:
+        defaults = dict(
+            org_id=org, observation_id=observation_id, case_id="14",
+            measured_at=NOW, outcome="fail", input_redacted="[redacted]",
+        )
+        return CaseResult(**{**defaults, **kw})
+
+    def _observation(self, org, product, **kw) -> int:
+        with org_session(org) as session:
+            row = _obs(org, product, **kw)
+            session.add(row)
+            session.flush()
+            return row.id
+
+    @pytest.mark.ac("AC-26")
+    def test_a_passing_case_may_not_carry_an_input(self, tenant):
+        """The privacy half of AC-26, and the only half a CHECK can honestly carry.
+        Nobody asks to see the input of a case that passed, so storing it is retained
+        personal data with no reader. PRD B6 sets unredacted PII at zero tolerance."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._case(
+                    org, observation_id, case_id="1",
+                    outcome="pass", input_redacted="the customer's actual question",
+                ))
+
+    @pytest.mark.ac("AC-26")
+    def test_a_passing_case_with_no_input_is_the_normal_row(self, tenant):
+        """Null on a pass is the correct state, not missing data."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            session.add(self._case(
+                org, observation_id, case_id="1", outcome="pass", input_redacted=None
+            ))
+        with org_session(org) as session:
+            row = session.execute(select(CaseResult)).scalar_one()
+        assert (row.outcome, row.input_redacted) == ("pass", None)
+
+    @pytest.mark.ac("AC-26")
+    def test_every_outcome_in_the_vocabulary_is_storable_and_others_are_not(self, tenant):
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            for i, outcome in enumerate(("pass", "fail", "error", "skipped")):
+                session.add(self._case(
+                    org, observation_id, case_id=f"c{i}", outcome=outcome,
+                    input_redacted="[redacted]" if outcome in ("fail", "error") else None,
+                ))
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._case(org, observation_id, case_id="flaky", outcome="flaky"))
+
+    @pytest.mark.ac("AC-26")
+    def test_a_skipped_case_may_not_carry_an_input_either(self, tenant):
+        """`skipped` means this metric did not measure the case. Nobody asks to see the
+        input of a case nobody measured, so storing it is retained personal data with no
+        reader — the same argument AC-26 makes about a passing case.
+
+        This is here because the first version of the rule was written as
+        `outcome <> 'pass'`, which let the text of every true negative through: nine of
+        fourteen cases per run for one fixture's recall metric."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._case(
+                    org, observation_id, case_id="tn",
+                    outcome="skipped", input_redacted="the customer's actual question",
+                ))
+
+    @pytest.mark.ac("AC-2")
+    def test_the_same_case_in_the_same_run_twice_is_refused(self, tenant):
+        """The idempotency key, which carries `measured_at` only because Postgres
+        requires a partitioned table's unique constraint to contain its partition keys.
+        It stays idempotent because the time is the observation's, not the clock's."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            session.add(self._case(org, observation_id))
+        with pytest.raises(IntegrityError):
+            with org_session(org) as session:
+                session.add(self._case(org, observation_id))
+
+    @pytest.mark.ac("AC-22")
+    def test_a_case_cannot_be_edited_after_it_has_been_cited(self, tenant):
+        """Append-only, in the database. A row a finding cites as its proof must not be
+        rewritable, and the one thing that legitimately changes — whether the trace body
+        still exists at the source — is resolved live and reported (B3 rule 11)."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            session.add(self._case(org, observation_id))
+        with pytest.raises((InternalError, ProgrammingError)) as caught:
+            with org_session(org) as session:
+                session.execute(text("UPDATE case_result SET outcome = 'pass'"))
+        assert "append-only" in str(caught.value)
+
+    @pytest.mark.ac("AC-23")
+    def test_a_case_whose_trace_is_gone_still_holds_its_outcome(self, tenant):
+        """AC-23's storage half. The pointer and the outcome survive the source's
+        retention window; whether the body behind it still exists is resolved later."""
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            session.add(self._case(
+                org, observation_id, trace_id="t-14",
+                trace_url="https://traces.example/t-14",
+            ))
+        with org_session(org) as session:
+            row = session.execute(select(CaseResult)).scalar_one()
+        assert (row.outcome, row.trace_id, row.trace_url) == (
+            "fail", "t-14", "https://traces.example/t-14",
+        )
+
+    @pytest.mark.ac("AC-27")
+    def test_rows_route_to_a_partition_by_month(self, tenant):
+        """AC-27's month half, asserted against where the row actually landed rather
+        than against the DDL that was issued."""
+        org, product = tenant
+        september = self._observation(org, product, run_url="https://runs.example/sep")
+        november = self._observation(
+            org, product, run_url="https://runs.example/nov",
+            measured_at=datetime(2026, 11, 20, 9, 0, tzinfo=UTC),
+        )
+        with org_session(org) as session:
+            session.add(self._case(org, september, case_id="s1"))
+            session.add(self._case(
+                org, november, case_id="n1",
+                measured_at=datetime(2026, 11, 20, 9, 0, tzinfo=UTC),
+            ))
+        with org_session(org) as session:
+            landed = dict(session.execute(text(
+                "SELECT tableoid::regclass::text, count(*) FROM case_result "
+                "GROUP BY 1 ORDER BY 1"
+            )).all())
+        assert len(landed) == 2, f"both rows in one partition: {landed}"
+        assert any("2026_09" in name for name in landed)
+        assert any("2026_11" in name for name in landed)
+
+    @pytest.mark.ac("AC-27")
+    def test_a_month_nobody_declared_still_stores_the_row(self, tenant):
+        """The DEFAULT partition. The application role cannot create a partition, so a
+        run outside the declared window would otherwise be rejected — and AC-2 forbids
+        omitting a run. Losing evidence to a maintenance job that did not run is worse
+        than a partition holding mixed months."""
+        org, product = tenant
+        far_future = datetime(2031, 5, 5, 9, 0, tzinfo=UTC)
+        observation_id = self._observation(org, product, measured_at=far_future)
+        with org_session(org) as session:
+            session.add(self._case(org, observation_id, measured_at=far_future))
+        with org_session(org) as session:
+            where = session.execute(text(
+                "SELECT tableoid::regclass::text FROM case_result"
+            )).scalar_one()
+        assert "default" in where
+
+    @pytest.mark.ac("AC-27")
+    @pytest.mark.edge_case("EC-9")
+    def test_a_tenant_scoped_delete_clears_every_partition_and_spares_the_other_tenant(
+        self, tenant
+    ):
+        """AC-27's delete half, which is audit item P9. One statement, across months,
+        and only the tenant that asked for it."""
+        org, product = tenant
+        other_org = make_org("erasure-other")
+        other_product = make_product(other_org, "theirs", name="Theirs")
+        november = datetime(2026, 11, 20, 9, 0, tzinfo=UTC)
+
+        for an_org, a_product in ((org, product), (other_org, other_product)):
+            for when, run in ((NOW, "sep"), (november, "nov")):
+                observation_id = self._observation(
+                    an_org, a_product, measured_at=when,
+                    run_url=f"https://runs.example/{run}",
+                )
+                with org_session(an_org) as session:
+                    session.add(self._case(
+                        an_org, observation_id, case_id=run, measured_at=when
+                    ))
+
+        with org_session(org) as session:
+            session.execute(text("SELECT set_config('app.erasure', 'on', true)"))
+            session.execute(text("DELETE FROM case_result"))
+
+        with org_session(org) as session:
+            assert session.execute(
+                select(func.count()).select_from(CaseResult)
+            ).scalar_one() == 0
+        with org_session(other_org) as session:
+            assert session.execute(
+                select(func.count()).select_from(CaseResult)
+            ).scalar_one() == 2, "an erasure crossed a tenant boundary"
+
+    @pytest.mark.ac("AC-27")
+    def test_a_case_cannot_be_deleted_without_an_erasure(self, tenant):
+        org, product = tenant
+        observation_id = self._observation(org, product)
+        with org_session(org) as session:
+            session.add(self._case(org, observation_id))
+        with pytest.raises((InternalError, ProgrammingError)) as caught:
+            with org_session(org) as session:
+                session.execute(text("DELETE FROM case_result"))
+        assert "append-only" in str(caught.value)
+
+
+class TestSourceFreshness:
+    """PRD B2, B3 rule 12 and B5 item 10. The columns that let an answer say how old
+    its evidence is. The behaviour they drive is step 11's; this is what the schema
+    refuses."""
+
+    def _source(self, org, product, **kw) -> Source:
+        defaults = dict(
+            org_id=org, product_id=product, role="eval", kind="file", config={},
+        )
+        return Source(**{**defaults, **kw})
+
+    def test_a_window_and_a_sync_time_are_storable(self, tenant):
+        org, product = tenant
+        with org_session(org) as session:
+            session.add(self._source(
+                org, product, freshness_window=timedelta(days=1),
+                last_sync_at=NOW, status="healthy",
+            ))
+        with org_session(org) as session:
+            row = session.execute(select(Source)).scalar_one()
+        assert (row.status, row.freshness_window) == ("healthy", timedelta(days=1))
+
+    def test_the_default_status_is_healthy(self, tenant):
+        """`bound` was the old free-text default and is not a value in B2's set."""
+        org, product = tenant
+        with org_session(org) as session:
+            session.add(self._source(org, product))
+        with org_session(org) as session:
+            assert session.execute(select(Source.status)).scalar_one() == "healthy"
+
+    def test_an_unknown_status_is_refused(self, tenant):
+        org, product = tenant
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._source(org, product, status="bound"))
+
+    def test_overdue_without_a_window_is_refused(self, tenant):
+        """A source cannot be overdue against a window nobody set. Without this, a
+        `status` of `overdue` could degrade verdicts on no stated basis at all."""
+        org, product = tenant
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._source(
+                    org, product, status="overdue", overdue_since=NOW,
+                ))
+
+    def test_overdue_without_a_timestamp_is_refused(self, tenant):
+        org, product = tenant
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._source(
+                    org, product, status="overdue", freshness_window=timedelta(days=1),
+                ))
+
+    def test_a_zero_or_negative_window_is_refused(self, tenant):
+        """A window of zero would make every measurement stale the instant it was
+        taken, which reads as the Layer being broken rather than as a policy."""
+        org, product = tenant
+        with pytest.raises((IntegrityError, DataError)):
+            with org_session(org) as session:
+                session.add(self._source(
+                    org, product, freshness_window=timedelta(0)
+                ))
+
+
+class TestHarvestCap:
+    @pytest.mark.ac("AC-33")
+    def test_a_product_carries_a_cap_defaulting_to_twenty(self, tenant):
+        """AC-33's storage half. US-1's twenty was a hardcoded `provisional` number,
+        which is the exact defect this product exists to find in other people's specs,
+        so it is a column. Nothing reads it until the write half exists."""
+        org, product = tenant
+        with org_session(org) as session:
+            from layer.db.models import Product
+
+            assert session.get(Product, product).harvest_cap == 20
+
+    @pytest.mark.ac("AC-33")
+    def test_a_cap_of_zero_is_refused(self, tenant):
+        org, _ = tenant
+        with pytest.raises((IntegrityError, DataError)):
+            make_product(org, "capless", harvest_cap=0)
+
+
 @pytest.mark.ac("AC-19")
 def test_a_second_tenants_records_are_invisible_across_every_new_table(tenant):
     """AC-19 asks that products be queryable separately and that no finding cite
@@ -362,10 +665,16 @@ def test_a_second_tenants_records_are_invisible_across_every_new_table(tenant):
 
     with org_session(other_org) as session:
         session.add(_clause(other_org, other_product, ref="THEIRS-1"))
-        session.add(_obs(other_org, other_product, clause_ref="THEIRS-1"))
+        theirs = _obs(other_org, other_product, clause_ref="THEIRS-1")
+        session.add(theirs)
+        session.flush()
+        session.add(CaseResult(
+            org_id=other_org, observation_id=theirs.id, case_id="14",
+            measured_at=NOW, outcome="fail", input_redacted="[redacted]",
+        ))
         session.add(AuditEvent(org_id=other_org, actor="them", action="spec_imported"))
 
     with org_session(org) as session:
-        for model in (Clause, Observation, AuditEvent):
+        for model in (Clause, Observation, CaseResult, AuditEvent):
             count = session.execute(select(func.count()).select_from(model)).scalar_one()
             assert count == 0, f"{model.__tablename__} leaked across tenants"

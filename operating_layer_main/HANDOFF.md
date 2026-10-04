@@ -1,6 +1,6 @@
 # Handoff report — AI product operating layer
 
-Version 3. 1 October 2026. Supersedes v2.
+Version 3. 1 October 2026, revised through 3 October. Supersedes v2.
 Everything about repositories was verified by reading source, not recalled.
 Paste this into a new chat to continue.
 
@@ -8,9 +8,10 @@ Paste this into a new chat to continue.
 requirements were general and which were fitted to them. v3 makes the Layer **product agnostic**
 (section 1), moves those two products to being **test fixtures** (section 8), adds the
 `product`, `source` and `binding` tables that define **how a product gets in at all** (section 6),
-draws the **three-way split of which half is whose plus the Dust boundary** explicitly (section 4),
-and rewrites the **build order to start from onboarding with Dust entering at exactly one phase**
-(section 12).
+draws the **split of which half is whose, the evidence spine, and the Dust boundary** explicitly
+(section 4), adds **`case_result` so a finding can name which runs and which cases are the proof**
+(section 6), and rewrites the **build order to start from onboarding with Dust entering at exactly one
+phase** (section 12).
 
 ---
 
@@ -45,9 +46,9 @@ propose.
 |---|---|
 | Trigger | Weekly, or on demand |
 | Reads | Traces where a judge scored low, the user thumbs-downed, or a handoff fired |
-| Does | Cluster, dedupe against the existing eval set, pick representatives |
+| Does | Cluster, dedupe against the existing eval set, then **rank** and cap. Ranking is by cluster size, clause proximity, novelty in embedding space and severity, with a per-cluster cap so one loud failure mode cannot fill the run. Written out in the PRD's US-1, because "pick representatives" defines nothing |
 | Writes | New cases into the Braintrust or Langfuse dataset, plus a ticket |
-| Review | PM ticks which cases go in |
+| Review | PM ticks which cases go in. Clusters beyond the cap are kept with their rank and stay queryable, so the cap is a priority order rather than a deletion |
 
 **C2. Eval regression → spec update.**
 
@@ -143,28 +144,97 @@ else it says.
 Read this before the stack block, because the stack only makes sense once this is settled. It is
 written out because it has been misread twice, and misreading it produces the wrong product.
 
-| | Who holds it | Is it mine to build |
+| | Who holds it | Is it mine to build | What I keep |
+|---|---|---|---|
+| **The product half.** Requirements, decisions, tickets, acceptance criteria, spec documents | Linear, Jira, Notion, Confluence, GitHub, Slack | **No.** Read over MCP | The clause, and the link to the ticket or decision |
+| **The AI half as telemetry.** Instrumentation, span trees, token detail, dataset management, the trace viewer | Langfuse, Braintrust, Phoenix | **No.** Read over MCP | Nothing |
+| **The AI half as evidence.** Which runs and which individual cases failed a clause, and where each one's trace lives | Langfuse, Braintrust **until retention deletes it** | **Yes, a copy, forever** | `observation` plus `case_result`. See the evidence spine below |
+| **The binding between the two halves.** Which measured number answers which written promise, with the full history of both | **Nobody. It is recorded nowhere today** | **Yes. This is the entire product** | `binding`, `link`, `clause` |
+| **The surface where a human asks and approves** | Dust, rented | **No.** Phase 4, and removable | Nothing |
+
+### The evidence spine
+
+**This is the correction that matters most, and it was wrong in v3 as first written.** An earlier
+version of this section said the Layer "does not store traces, spans, prompts or datasets" and that an
+`observation` is "one number bound to one clause at one point in time". The second half of that is too
+thin to do the job. The product's whole point is to name **which runs are the proof** of a degradation,
+and an aggregate number cannot do that. The reference finding is "missed in 7 of 47 runs, worst 80%",
+which is only sayable from per-case outcomes. The first version of this section would have stopped the
+implementer storing the one thing the product exists to show.
+
+**Keep forever, in my own store.**
+
+| What | Why | Volume |
 |---|---|---|
-| **The product half.** Requirements, decisions, tickets, acceptance criteria, spec documents | Linear, Jira, Notion, Confluence, GitHub, Slack | **No.** Read over MCP, never re-hosted |
-| **The AI half.** Traces, eval runs, prompts, judge scores, model logs, corpora, spend | Langfuse, Braintrust, Phoenix | **No.** Read over MCP, never re-hosted |
-| **The binding between the two halves.** Which measured number answers which written promise, with the full history of both | **Nobody. It is recorded nowhere today** | **Yes. This is the entire product** |
-| **The surface where a human asks and approves** | Dust, rented | **No.** Phase 4, and removable |
+| Per clause per run, the metric, verdict, `prompt_sha`, `corpus_sha`, `run_url` | The sequence that drift is detected across | One row per clause per run |
+| **Per failing case, the case id, outcome, redacted input, and the trace id or url** | This is the proof. Without it the Layer can say a bar was missed but not which cases missed it | Bounded by eval suite size, hundreds per run |
+| The clause, the binding, the link, the audit event | The record itself | Thousands |
 
-**Three things this rules out, each of which has been proposed and must not be built.**
+**Never store.** Production spans at volume, token-level detail, full prompt and completion text for
+every trace, the corpora, the datasets themselves, or any instrumentation SDK. The Layer emits OTel
+spans about its own behaviour and ingests none.
 
-1. **I am not building the AI tracing and eval half.** Langfuse and Braintrust own it, they are better
-   at it, and section 15 already forbids a search index over eval runs and a read-only dashboard. The
-   Layer stores `observation` rows, which are one number bound to one clause at one point in time. It
-   does not store traces, spans, prompts or datasets.
-2. **I am not building the product half either.** Linear holds the ticket. Notion holds the requirement.
-   The Layer holds the `link` saying the ticket implements the clause, and nothing more.
-3. **Dust holds neither half.** It is a client of both, exactly as Claude Code is. Treating Dust as
+### Why this does not become a trace store. Three tiers and the arithmetic
+
+The obvious objection is that traces run to millions and that is why no eval platform keeps them
+forever. Correct, and it does not apply here, because **the millions are production traces and this
+stores eval case results.** Two different populations, four or five orders of magnitude apart.
+
+| Tier | What is kept | Volume |
+|---|---|---|
+| **Eval case results** | Every row, forever | Hundreds of thousands a year |
+| **Production** | The aggregate forever, plus only the failures harvested into eval cases by C1 | Hundreds a year |
+| **Trace bodies** | Never. A url and an id | Thirty bytes per case |
+
+**The arithmetic.** A suite of 350 cases run 20 times a month is 7,000 rows a month, 84,000 a year, per
+product. Ten products is under a million rows a year. Postgres handles that on a laptop, and in
+ClickHouse or Timescale it compresses to a few hundred megabytes. Langfuse deletes because it ingests
+every span of every request for every customer at firehose volume. That is not what this is.
+
+**One refinement that removes most of the bytes.** Write a `case_result` row for **every** case, because
+the counts are what drift detection reads, but populate `input_redacted` **only for cases that did not
+pass**. A passing case's input is never asked for, and at a typical pass rate this drops stored text by
+roughly 90%. `input_redacted` is therefore nullable, and null on a passing row is the expected state
+rather than missing data.
+
+**If it ever does grow.** Partition by month in the columnar store, which is already the stack decision.
+Dropping or archiving an old partition is one statement. Nothing in the projected volume gets near
+needing it.
+
+**Multi-tenant changes nothing about the shape.** Each tenant's rows carry `org_id` and partition by
+month alongside it, so the structure is identical and only the row count multiplies, staying small
+because it tracks eval suite size rather than traffic. Partitioning by `org_id` as well as month is what
+makes a tenant-scoped delete and a per-tenant retention window one statement each, which is audit item
+P9.
+
+**Selling this changes the arithmetic by a constant, not by shape.** Per-customer volume follows that
+customer's eval suite size rather than their traffic, so a hundred tenants is still a few hundred
+gigabytes. What selling does add is a per-tenant retention policy and a tenant-scoped hard delete,
+which is audit item P9, because these rows are **other companies' customer inputs**.
+
+**Why a copy rather than a live read.** Langfuse and Braintrust delete traces on lower tiers, often at
+30 to 90 days. A finding that cites a deleted trace is exactly the unacceptable failure the PRD ranks
+at B5 item 8. So the outcome and the trace pointer are copied into my own store at observation time and
+survive deletion, while the trace body itself stays at the source. When a human asks to see the actual
+conversation, the Layer fetches it live over MCP, and when it is past retention the Layer says the
+trace body is gone and still shows the outcome it recorded.
+
+**What this is not.** It is not a trace viewer, not a search index over runs, and not a dashboard.
+Section 15 still forbids all three. Holding the evidence your own findings cite is not the same as
+re-hosting the eval platform.
+
+**Two things this still rules out.**
+
+1. **I am not building the product half.** Linear holds the ticket. Notion holds the requirement. The
+   Layer holds the `link` saying the ticket implements the clause.
+2. **Dust holds neither half.** It is a client of both, exactly as Claude Code is. Treating Dust as
    "the half I am not building" is the error that makes the build order unreadable, because it implies
    Dust supplies data. It supplies a conversation and an approval prompt.
 
 **The one-line test.** If a feature would still be useful with Langfuse, Linear, Notion and Dust all
 switched off, it belongs in the Layer. If it would not, it belongs to one of them and must be read over
-MCP instead of rebuilt.
+MCP instead of rebuilt. The evidence spine passes that test, because a finding must stay provable after
+the trace it cites has been deleted at the source.
 
 ```
 private_operating_layer   →  the database, the approval loop, and the MCP server   (MINE, reuse)
@@ -276,12 +346,21 @@ Public repo, pushed 10 Sep 2026. FastAPI + Postgres + pgvector + SQLAlchemy + La
 
 ```
 product         -- NEW. Nothing exists in the Layer until a row is here
-  id, org_id, key, name, pattern, status, created_at
+  id, org_id, key, name, pattern, status, harvest_cap, created_at
+  harvest_cap = how many eval-case candidates C1 may present per run.
+    Default 20, and PROVISIONAL by this spec's own definition until a
+    product's acceptance history justifies another number.
   pattern ∈ rag | classifier | agent | <anything> | null   -- a DEFAULTS HINT, never a constraint
   status  ∈ registering | sources_bound | assertions_confirmed | live
 
 source          -- NEW. Where every record in every other table came from
-  id, org_id, product_id, role, kind, config, status, last_sync_at
+  id, org_id, product_id, role, kind, config, status, last_sync_at,
+  freshness_window, overdue_since
+  status ∈ healthy | overdue | failing | paused
+  freshness_window = how long a measurement from this source stays usable.
+    Per source, because a nightly eval and a quarterly human review differ.
+    Past it, any verdict resting on this source degrades to cannot_confirm.
+    AN ABSENT MEASUREMENT IS NOT A PASSING ONE. See the PRD's B2 and B3 rule 12.
   role ∈ spec | eval | code | ticket | production | decision
   kind ∈ file | repo | langfuse | braintrust | promptfoo | linear | jira
        | notion | slack | datadog | prometheus | custom_mcp
@@ -313,6 +392,20 @@ observation     -- NEW, append-only, forever. NOT in the Postgres row store at v
   source_kind ∈ eval | production        -- covers both C2 and C8
   UNIQUE (org_id, clause_ref, metric, run_url)   -- idempotency, see P5
 
+case_result     -- NEW, append-only. THE PROOF. One row per individual case in a run.
+  org_id, observation_id, case_id, outcome, input_redacted NULL,
+  trace_url, trace_id, measured_at
+  outcome ∈ pass | fail | error | skipped
+  UNIQUE (org_id, observation_id, case_id)       -- idempotency, same reason as above
+  -- This is what lets the Layer answer "which runs and which cases are the proof".
+  -- An aggregate metric cannot say "missed in 7 of 47 runs, worst 80%". This can.
+  -- Bounded by eval suite size, hundreds per run, NOT by production trace volume.
+  -- A row for EVERY case, because the counts drive drift detection.
+  -- input_redacted ONLY for outcome != pass. Null on a passing row is correct,
+  --   not missing data. Drops stored text ~90% at a typical pass rate.
+  -- input_redacted passes through the `shared/redact.py` pattern before storage.
+  -- trace_url survives the source's retention window even after the trace body is gone.
+
 proposal        -- reuse pending_entities, or a sibling table
   org_id, target_entity, field, old, new, reason, evidence,
   state, decided_by, decided_at
@@ -325,10 +418,13 @@ defaults applied rather than be refused.
 ### Four stores, not one
 
 Traces in the millions and links in the thousands are different problems. A graph DB solves neither.
+The interface matters more than the engine: the Layer is written against an `ObservationStore`
+interface, so swapping the engine beneath it is a configuration change rather than a rewrite of every
+query.
 
 | Data | Volume and shape | Store |
 |---|---|---|
-| Traces and observations | Millions, numeric, time-series | **ClickHouse or Timescale.** Langfuse itself runs on ClickHouse |
+| Observations and case results | Hundreds of thousands to millions, numeric, time-series | **Postgres, partitioned, behind an `ObservationStore` interface.** These are my own evidence rows, not ingested spans, and the arithmetic in section 4 puts ten products under a million rows a year. Partition by month with a hash of `org_id` beneath it, which is also what makes a tenant-scoped delete one statement. **ClickHouse or Timescale is the move when that arithmetic stops holding**, which is open question 1 rather than a settled dependency. Langfuse itself runs on ClickHouse because it ingests every span of every request |
 | `link`, `clause`, `entity` | Thousands, typed, traversed | Postgres, with recursive CTE for `trace_chain` |
 | Spec and requirement text, C1 dedupe | Hundreds | pgvector |
 | Keyword search over spec and decisions | Hundreds | Postgres `tsvector`, or Elasticsearch later |
@@ -343,9 +439,15 @@ the work is exploratory pattern matching. Not before.
 
 ### MCP tools
 
+The authoritative version of this is the PRD's **B11**, which adds the per-tool rules and the two
+acceptance criteria. Kept here because the handoff is what gets pasted into a build chat.
+
 ```
 reads
-  list_clauses(product, failing?, state?)
+  list_products(org)                  -- what is onboarded at all, with status
+  get_product(key)                    -- sources, their status and staleness
+  source_status(product)              -- last_sync_at, overdue_since, per source
+  list_clauses(product, failing?, state?, verdict?)
   get_clause(ref)                     -- statement, threshold, latest value, links, history
   trace_chain(entity)                 -- C5, walks links in both directions
   find_unenforced(product)            -- clause with no `enforces` link
@@ -355,31 +457,57 @@ reads
   find_stalled_decisions(org)         -- C7, decision with no resulting PR, ticket or spec change
   metric_history(clause_ref, window)  -- C8
   blocked_tickets(product)            -- C4
+  failing_cases(clause_ref, window)   -- THE PROOF TOOL. Returns the individual cases
+                                      -- that failed, each with its run_url and trace_url,
+                                      -- so a human never greps a log to find them.
+                                      -- Answers "which runs are the evidence" directly.
 
-writes
+writes, none of which change the definition of correct
   record_observation(clause_ref, value, source_kind, run_url, prompt_version, measured_at)
+  record_case_results(observation_id, cases[])
   propose_change(target, field, new_value, reason, evidence)
   propose_link(from, to, link_type, reason)
+  propose_binding(product, metric, clause_ref, reason)
 
-human only, NOT exposed as MCP tools
+human only, NOT exposed as MCP tools at all
+  register_product(key, name, pattern?)
+  bind_source(product, role, kind, config, freshness_window)
+  confirm_binding(id, confirmed_by)
+  reject_binding(id, reason)
   accept_proposal(id, decided_by)
   reject_proposal(id, reason)
 ```
 
 **Design rule.** The server never edits the spec and never writes a link silently. It creates proposals.
-The approval boundary lives inside the server, not in an agent prompt, so it holds regardless of how
-any agent is configured or who wired it up.
+The approval boundary lives inside the server, not in an agent prompt or a tool allowlist, so it holds
+regardless of how any agent is configured, who wired it up, or what an ingested document tells that
+agent to do. **A boundary enforced by prompt is not a boundary.**
+
+**`confirm_binding` is human-only for the same reason `accept_proposal` is.** This is easy to miss. No
+proposal may exist for a product with no confirmed binding, so an agent able to confirm its own bindings
+can manufacture that precondition and then propose freely, turning the gate into a formality. An agent
+may **propose** a binding and must then stop. Exposing `confirm_binding` over MCP would be a P0.
+
+Onboarding steps 1, 2 and 5 are therefore human actions by construction, not by policy.
 
 ### History must be mine
 
 MCP alone cannot supply history. Langfuse and Braintrust delete old traces on lower tiers, often 30 to
 90 days, and querying months of runs over MCP is hundreds of calls. So a scheduled pull appends
-observation rows to my own table, forever. **Backfill now**, because the retention window is eating
-history today. `chatbot-lab`'s committed `runs/*.json` are permanent, so start there.
+**both** `observation` and `case_result` rows to my own tables, forever. **Backfill now**, because the
+retention window is eating history today. `chatbot-lab`'s committed `runs/*.json` are permanent, so
+start there.
+
+**Per-case, not just per-run.** Copying only the aggregate metric was the original mistake. Three
+months from now the question is "which cases regressed when the prompt changed at v3", and that is
+unanswerable from a single number per run. The trace body stays at the source and may be deleted. The
+**outcome and the pointer to it are mine** and never are.
 
 ---
 
-## 7. Waku patterns to copy by hand
+## 7. Patterns and components to adopt
+
+### Waku patterns to copy by hand
 
 `github.com/ShenSeanChen/waku-agent`. MIT plus a separate `LICENSE-BRAND`. 28.7k lines, single author,
 actively maintained, last commit 17 Sep 2026. Local-first teaching repo for a YouTube series.
@@ -392,6 +520,46 @@ actively maintained, last commit 17 Sep 2026. Local-first teaching repo for a Yo
 | `ops/pricing.py` | Store tokens, never prices. Derive cost at read time from current tables, so fixing a wrong rate silently corrects every historical chart. Half satisfied already |
 | `memory/retrieval_gate.py` | A cheap model decides *whether* to retrieve before touching the store. Default-on RAG is slow and actively worse, since irrelevant context biases the answer |
 | `ops/release_gate.py` | Deterministic evals must pass 100%, judge evals scored against thresholds, exit code gates the release |
+
+### Jev (typesafe.ai) as a swappable critic backend
+
+A candidate, not a decision. `Jev` is TypeSafe AI's first "System One" model, in limited early access
+since 15 Sep 2026 on a $40M seed led by DCVC, founded by Diogo Almeida, ex OpenAI. It is
+non-autoregressive and does not generate text. You declare the output schema up front, which fields and
+which allowed values, and it returns those fields filled in with a calibrated probability on each, in
+one parallel forward pass. Because valid outputs are declared in advance it cannot return an
+out-of-schema value or a type error. The vendor claims 40x to 200x faster than frontier LLMs on
+comparable tasks at $0.042 per million input tokens with free output. Calibration is trained by
+Reinforcement Learning for Calibrated Decisions, where probabilities are optimised against outcomes
+rather than against human rater preference.
+
+**Why that matters here specifically.** Three places in this design are closed-enum decisions with a
+confidence number attached, which is exactly the shape Jev returns.
+
+| Where | The decision | Why Jev fits |
+|---|---|---|
+| **The critic**, `ingestion/critic.py` | `{approved, confidence_score}` against the 0.7 and 0.5 thresholds | The whole 50% to 85% acceptance band in the PRD depends on that score meaning something. Today it is an LLM's self-reported number and is not calibrated against outcomes |
+| **Onboarding step 5**, confirming metric-to-clause bindings | For each candidate pair, yes, no or unsure with a probability | This is the strongest fit. At 40x to 200x cheaper, eighty clauses against forty metrics becomes affordable, which is the cost half of open question 16 |
+| **The Waku retrieval gate** | Retrieve or do not retrieve, with confidence | Binary with a calibrated probability is what the model is built for |
+
+**How to wire the critic.** Split the current single call. Jev returns `approved` and
+`confidence_score`. A text model writes the one-sentence `reason`, because Jev does not produce prose
+and `reason` is what a human reads before deciding. Keep both behind the existing critic interface so
+either half is swappable.
+
+**Where it must not be used.** Verdict assignment, finding kind classification, and drift and
+unenforced detection. The PRD sets those at **100% recall** because they are SQL comparators over
+stored numbers. Any model in that path, calibrated or not, drops recall below 100% and breaks the spec.
+Schema-bounded output is not the same as a correct comparison.
+
+**Security note, not a security fix.** Jev being schema-bounded means an injected trace cannot make it
+emit something outside the enum, which removes one class of attack. It does **not** stop an injected
+trace flipping `approved` to true. Audit item P2 stands unchanged, so a spec edit or a CI change still
+requires a human regardless of the score.
+
+**Treat it the way Waku is treated.** A pattern or a component behind an interface, never a dependency.
+Single vendor, proprietary, early access, five months old. If it disappears the critic must keep working
+on the current LLM path with one config change.
 
 ---
 
@@ -599,7 +767,9 @@ Then build onboarding end to end as the only way content enters:
 - register a product, with an optional pattern hint
 - bind sources, requiring at least one `spec` role and at least one `eval` role
 - import the spec into clauses with stable refs, all `provisional` and `not_measured`
-- backfill **every** historical run from the eval source, none skipped
+- backfill **every** historical run from the eval source, none skipped, writing `observation` rows
+  **and** the `case_result` rows beneath them. Per-run aggregates alone are not enough and leaving the
+  per-case layer for later makes every drift finding unprovable
 - present candidate metric-to-clause bindings and **stop until a human confirms them**
 
 Done means: an arbitrary product with a spec file and an eval directory reaches `live` with no code
@@ -611,11 +781,13 @@ fitted to one product's layout. The second fixture is the test, not a bonus.
 conditions in the PRD's C1 surface from committed data, with no UI, no agent and no Dust. Every
 finding carries citations pinned to an immutable revision and states no cause.
 
-Done means: the fixture findings reproduce, and they reproduce in both fixtures rather than one.
+Done means: the fixture findings reproduce, and they reproduce in both fixtures rather than one. Each
+one names the specific runs and cases that are its evidence, with a trace url where the source has one,
+so nobody has to open a log to check it.
 
 **Phase 3, about a week. The MCP server, over stdio.**
-Wrap the phase 2 queries plus `list_clauses`, `get_clause`, `trace_chain`, `metric_history` and
-`record_observation` as MCP tools. **stdio only.** Test from Claude Code in a terminal. Every PRD
+Wrap the phase 2 queries plus `list_clauses`, `get_clause`, `trace_chain`, `metric_history`,
+`failing_cases` and `record_observation` as MCP tools. **stdio only.** Test from Claude Code in a terminal. Every PRD
 acceptance criterion must pass here, with no Dust present. This is the product.
 
 **Phase 4. HTTP, a token, and Dust as a client.**
@@ -640,7 +812,9 @@ new `kind` and no new concepts. `trace_chain` lights up, which is C5. `find_stal
 built wrong.
 
 **Phase 7. Operations.**
-Scheduled pulls, OTel tracing, the retrieval gate, the release gate pattern, all from section 7.
+Scheduled pulls, OTel tracing, the retrieval gate, the release gate pattern, all from section 7. If a
+calibrated critic is wanted, this is where Jev is trialled behind the existing critic interface, after
+the acceptance rate from phase 5 exists as a baseline to compare against.
 
 **Later, only if the brand and pricing need owning.** The Dust fork, per section 9.
 
@@ -669,14 +843,27 @@ which is a process failure worth noting.
 | **Wrote v1 and v2 around the two `chatbot-lab` products throughout** | **Wrong. Those are test fixtures.** The Layer is product agnostic and must onboard any AI product from its own spec and eval sources with no code change. Fixture names may not appear outside `tests/` |
 | **Specified proposals, the acceptance band and the approval loop, but never specified how a product enters the Layer** | **Wrong, and it is the defect that matters most.** Anyone implementing v2 would start generating proposals against nothing. Onboarding, `product`, `source` and `binding` are now phase 1, and no proposal may exist for a product with zero confirmed bindings |
 | **Build order mixed renting Dust with building the Layer, phase by phase** | **Dust is a surface, not a dependency.** Phases 1 to 3 have no Dust at all and must pass over stdio. Dust enters at phase 4 as an MCP client and nothing in the Layer changes when it does |
+| **"The Layer does not store traces, spans, prompts or datasets", and an observation is "one number bound to one clause"** | **Half right, and the wrong half was load-bearing.** Correct that the Layer never re-hosts telemetry, a trace viewer or a dataset. Wrong that an aggregate number is enough. Naming **which runs and which cases are the proof** is the product's main job, and "missed in 7 of 47 runs" is unsayable without per-case outcomes. Added `case_result`, the `failing_cases` tool, and the evidence spine in section 4. Written down because this line, left standing, would have stopped the implementer storing the one thing the product exists to show |
 | **"Dust handles the product half, I build the AI tracing and eval half"** | **Wrong on both counts, and the most dangerous misreading so far.** Linear and Notion hold the product half. Langfuse and Braintrust hold the AI half. Dust holds neither and is a client of both. **I build only the binding between them.** Building the eval half means building a tracing platform, which section 15 forbids outright. Written out as the three-way split in section 4 |
 
 ---
 
 ## 14. Open questions, unverified
 
-1. Does hosted Dust gate remote MCP servers by plan tier?
-2. What auth scheme does Dust's credential policy accept for a remote MCP server?
+Numbering is kept stable as items resolve, so a resolved item stays in place with its answer rather
+than being deleted and shifting everything below it.
+
+1. ~~Does hosted Dust gate remote MCP servers by plan tier?~~ **RESOLVED, 3 Oct 2026. Yes, remote MCP
+   servers sit behind a paid plan tier.** This does not block anything, because Dust is phase 4 and
+   phases 1 to 3 have no Dust in them. **The free test harness is stdio in Claude Code or Claude
+   Desktop**, both of which load a local MCP server with no plan tier and no HTTP, and every acceptance
+   criterion in the PRD is written to pass that way. Paying for Dust becomes a decision only when
+   multiplayer and scheduled triggers are wanted, which is phase 4. The free alternatives for that, if
+   the tier is not worth paying for, are self-hosted Dust under MIT, which gives all five of the things
+   Dust is rented for at the cost of running Postgres, Redis, Temporal and WorkOS, or LibreChat and
+   Open WebUI, which give multi-user chat with MCP but no durable agent loop and no approval prompt.
+2. What auth scheme does Dust's credential policy accept for a remote MCP server? **Still open**, and
+   now the only Dust question that matters. It is a phase 4 question, not a phase 1 one.
 3. What are the Langfuse and Braintrust retention windows on the current tier? **History is being lost
    right now, so this is urgent.**
 4. Current import path for the MCP Python SDK. It moved during 2025, do not trust memory.
@@ -716,14 +903,19 @@ which is a process failure worth noting.
 - Design, technical design, code generation, GTM. Figma, Claude Code, Cursor own those.
 - A read-only dashboard. Braintrust and Langfuse can add views in a quarter. **The write-back is the moat.**
 - A search index over eval runs. Wrong data shape, stale in the worst place, bad unit economics,
-  duplicates the source of truth, and the query is SQL rather than retrieval.
+  duplicates the source of truth, and the query is SQL rather than retrieval. **This forbids a retrieval
+  index over trace bodies. It does not forbid the evidence spine in section 4,** which is per-case
+  outcomes plus a trace pointer, queried with SQL, bounded by eval suite size, and kept because a
+  finding must stay provable after the source deletes the trace.
+- A trace viewer or a span waterfall. Langfuse renders those, and the Layer links out to them.
+- Ingesting production spans at volume, or any instrumentation SDK of my own.
 - Causal attribution. Correlation with a timestamp is the ceiling, and claiming more destroys trust.
 
 ---
 
 ## 16. Production readiness audit
 
-Run 25 Sep 2026 against `private_operating_layer`. **It is not production grade yet.** Ten gaps,
+Run 25 Sep 2026 against `private_operating_layer`, extended 3 Oct. **It is not production grade yet.** Eleven gaps,
 severity ranked, with the specific fix. Multi-tenant raises the bar on almost all of them, because a
 single failure now exposes every tenant rather than one.
 
@@ -787,20 +979,73 @@ tenant-scoped hard delete now rather than retrofitting it under legal pressure. 
 **P10. No observability of the system itself.** Building an eval-watching product with no tracing.
 The Waku `ops/tracing.py` pattern fixes this and is already on the list.
 
+**P11. The dead man's switch alerts nobody.** `scripts/watchdog.py` detects overdue processes
+correctly, but its `alert()` function only prints to stderr. The Slack webhook is present as commented
+out code. systemd captures the message in the journal, so the failure is recorded and **no human is
+told**. A watchdog that nobody hears is a log line, not an alarm.
+*Fix.* Wire `alert()` to one real channel and verify it by deliberately letting a process go overdue.
+This is a twenty minute job and it is listed separately from the "already sound" entry below because
+the mechanism is sound and only the last step is missing. It matters more for this product than most,
+for the reason in the explanation of the dead man's switch below.
+
+*The other half, which is not an ops fix.* The watchdog protects the **data arriving**. Nothing in it
+protects the **answer given** once the data stops, so a dead pull would leave clauses sitting at `met`
+from a three week old number with full confidence and no error anywhere. That half is now specified in
+the PRD, as `freshness_window` on `source`, the "silence must be visible in the answer" rules in B2,
+B3 rule 12, B5 item 10 and AC-28 to AC-30. **Both halves are needed.** Either one alone leaves the
+product able to be quietly wrong, which is the one failure that ends trust in everything else it says.
+
 ### Already sound, do not undo
 
-- **Alembic is present**, so versioned migrations are covered.
-- **pydantic-settings plus `.env`**, no hardcoded application secrets.
-- **SQLAlchemy ORM throughout**, so queries are parameterised by default.
-- **`shared/redact.py` in `chatbot-lab`** masks PII before anything reaches Langfuse. That instinct is
-  right and should be ported here, because traces are a database of customer questions.
-- **`process_heartbeat` plus the watchdog timer and dead man's switch** is real operational thinking.
-- **The critic plus approval queue** is a security control that already exists.
+**Written out in plain terms, because these are easy to delete by accident when they look like
+boilerplate. Each one is doing real work.**
+
+**Alembic.** A database has a shape, meaning its tables and columns. When the shape changes, Alembic
+writes a numbered step file for that change. Running the steps in order brings any database from the old
+shape to the new one, and each step can be reversed. It is version control for the schema. Without it
+you hand-edit production tables and hope the development copy matches. This gets used constantly when
+`product`, `source`, `binding` and `case_result` are added, so **do not bypass it with manual SQL**.
+
+**pydantic-settings plus `.env`.** Passwords, database URLs and API keys live in a `.env` file outside
+the code, and pydantic-settings loads and validates them when the process starts. Two benefits. Secrets
+never reach GitHub, where a committed secret stays in the history forever even after it is deleted. And
+a missing key crashes the app on boot instead of failing in the middle of a request at 3am.
+**Scope note.** This covers **my own** secrets. The **customers'** OAuth tokens in
+`models/oauth_integrations.py` are still plaintext in the database, which is P1 and still open. Two
+different problems, and the second is not solved by the first.
+
+**SQLAlchemy ORM.** Queries are written as Python objects and the library generates the SQL. The
+security part is the phrase "parameterised by default". User-supplied text is sent to the database as a
+separate value rather than pasted into the query text, so someone entering
+`'; DROP TABLE clauses; --` has that stored as literal characters instead of executed as a command.
+That is SQL injection prevented for free, and it matters more here than in most applications, because
+the Layer reads text written by strangers.
+
+**`shared/redact.py` in `chatbot-lab`.** Masks PII before anything reaches Langfuse. That instinct is
+right and should be ported here, because traces are a database of customer questions, and because
+`case_result.input_redacted` now stores that text.
+
+**`process_heartbeat` plus the watchdog timer and dead man's switch.** Three parts of one idea.
+
+| Part | File | What it does |
+|---|---|---|
+| The table | `models/process_heartbeat.py` | One row per background process, holding `last_beat_at`, `last_status`, `last_error` and `expected_interval_minutes` |
+| The beat | `services/heartbeat.py` | Each process records "I ran and I am fine" every time it runs |
+| The watchdog | `scripts/watchdog.py` | Runs every five minutes on a systemd timer, checks whether anything is overdue, exits non-zero so systemd records a failure |
+
+**Why "dead man's switch" is the right name, and why it matters here specifically.** Ordinary
+monitoring tells you when something **errors**. This tells you when something **stops**. That is the
+harder failure and it is this product's worst case. A scheduled Langfuse pull that quietly dies raises
+no error at all. The evidence store simply develops a hole, and every finding covering that window is
+silently wrong while still looking confident. Detecting silence is therefore a correctness control here,
+not just an operations nicety. **See P11.** The detection works and the alerting does not.
+
+**The critic plus approval queue** is a security control that already exists. See P2.
 
 ### Order to fix
 
-P1 and P4 before any real tenant data exists. P2 and P3 before C1 or C3 ship. P5 and P6 before the
-first paying customer. The rest before scale.
+P1 and P4 before any real tenant data exists. P2 and P3 before C1 or C3 ship. P5, P6 and P11 before the
+first paying customer, and P11 before the first scheduled pull runs unattended. The rest before scale.
 
 ---
 

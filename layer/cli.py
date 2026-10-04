@@ -18,7 +18,8 @@ import uuid
 from sqlalchemy import select
 
 from layer.core.db import org_session, unscoped_session
-from layer.core.errors import LayerError
+from layer.core.durations import format_duration, parse_duration
+from layer.core.errors import LayerError, Unreadable
 from layer.db.models import Org, Product
 from layer.findings import queries
 from layer.onboarding import bindings as binding_gate
@@ -74,13 +75,26 @@ def _register(args) -> int:
 
 def _bind(args) -> int:
     config = json.loads(args.config)
+    try:
+        window = parse_duration(args.freshness) if args.freshness else None
+    except ValueError as exc:
+        # A refusal the operator reads and corrects, not a traceback.
+        raise Unreadable(str(exc)) from exc
     with org_session(args.org) as session:
         product = state.get(session, key=args.product)
         source = state.bind_source(
             session, product=product, role=args.role, kind=args.kind,
-            config=config, actor=args.actor,
+            config=config, freshness_window=window, actor=args.actor,
         )
         print(f"bound {args.role}/{args.kind} to {product.key}  ({source.id})")
+        if window:
+            print(f"  freshness window {format_duration(window)}; outside it, any "
+                  f"verdict resting on this source degrades to cannot_confirm")
+        else:
+            # Said out loud rather than left as a blank field. A source with no stated
+            # cadence is not a fresh one, and a reader has to know the difference.
+            print("  no freshness window stated, so this source's age is reported "
+                  "and never used to degrade a verdict")
         print(f"  {product.key}: {product.status}")
     return 0
 
@@ -262,6 +276,9 @@ def _parser() -> argparse.ArgumentParser:
                       choices=["spec", "eval", "code", "ticket", "production", "decision"])
     bind.add_argument("--kind", required=True)
     bind.add_argument("--config", required=True, help="JSON; the product-specific shape")
+    bind.add_argument("--freshness", metavar="30d",
+                      help="how long a measurement from this source stays usable "
+                           "(90m, 12h, 30d, 2w). Omitted means no stated cadence")
     bind.set_defaults(handler=_bind)
 
     with_common(sub.add_parser("spec", help="step 3: import")).set_defaults(handler=_import_spec)

@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from layer.core import audit
+from layer.core.durations import format_duration
 from layer.core.errors import NotLive, UnknownProduct
 from layer.db.models import Binding, Clause, Observation, Product, Source
 from layer.onboarding import bindings as binding_gate
@@ -132,18 +134,33 @@ def bind_source(
     kind: str,
     config: dict,
     pinned_rev: str | None = None,
+    freshness_window: timedelta | None = None,
     actor: str,
 ) -> Source:
+    """PRD B11's `bind_source`, which is human-only and never an MCP tool.
+
+    `freshness_window` is stated here because this is the only place a human says how
+    often this source is expected to speak. It is optional: a source whose cadence
+    nobody has stated is held to no window and its age is reported rather than used to
+    degrade a verdict. Silence about the cadence is not a claim that the data is fresh.
+    """
     source = Source(
         org_id=product.org_id, product_id=product.id, role=role, kind=kind,
-        config=config, pinned_rev=pinned_rev, status="bound",
+        config=config, pinned_rev=pinned_rev, status="healthy",
+        freshness_window=freshness_window,
     )
     session.add(source)
     session.flush()
     audit.record(
         session, org_id=product.org_id, actor=actor, action=audit.SOURCE_BOUND,
         subject=f"source:{source.id}",
-        detail={"role": role, "kind": kind, "pinned_rev": pinned_rev, "product": product.key},
+        detail={
+            "role": role, "kind": kind, "pinned_rev": pinned_rev,
+            "product": product.key,
+            "freshness_window": (
+                format_duration(freshness_window) if freshness_window else None
+            ),
+        },
     )
     _advance(session, product, actor)
     return source

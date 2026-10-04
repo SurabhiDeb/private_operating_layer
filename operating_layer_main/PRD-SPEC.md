@@ -1,9 +1,11 @@
 # AI Product Operating Layer — PRD and Specification
 
-Version 3. 1 October 2026. Derived from HANDOFF.md v3, then revised against the working
+Version 3. 1 October 2026, revised through 3 October. Derived from HANDOFF.md v3, then revised against the working
 prototype (`Operating_Layer.html`), which is now the reference implementation for the read half.
 Part D records what changed and why. **v3 made the Layer product agnostic, defined how a product gets
-in, and drew the Dust boundary.** See D3.
+in, drew the Dust boundary, added the evidence spine so a finding can name which runs and cases are its
+proof, made staleness visible in the answer rather than only in a log, and specified the tool surface
+with its approval boundary.** See D3.
 
 This document defines what correct means for the product itself. Every test, metric and CI gate
 downstream derives from it. If this document is wrong, everything built on it measures the wrong thing.
@@ -45,6 +47,8 @@ at a company with two or more shipped LLM features.
 
 - **Onboard any AI product from its own spec and eval sources, with no code change to the Layer**
 - Hold clauses, typed links and an append-only history of every measurement
+- **Name which runs and which individual cases are the evidence for a finding**, with a pointer to each
+  one's trace, so a human never reads a log to check a claim
 - Answer questions that cross the product half and the AI half
 - Propose eval cases from production failures
 - Propose spec edits when reality disagrees with a stated threshold
@@ -61,6 +65,9 @@ at a company with two or more shipped LLM features.
 - Claim a cause. Correlation with a timestamp is the ceiling
 - **Know anything about any particular product before that product is onboarded.** There is no demo
   product, no seeded clause set and no built-in knowledge of any product's metric names or file layout
+- Re-host telemetry. No instrumentation SDK, no span ingestion, no trace viewer, no span waterfall, no
+  dataset management, no retrieval index over trace bodies. See B2's evidence spine for the line between
+  storing evidence and re-hosting an eval platform
 - Replace the eval platform, the ticket tracker or the observability tool
 
 The narrowness is deliberate. A tool that also writes the PRD is two products, and neither can be
@@ -106,7 +113,8 @@ When the Layer eventually grows its own UI, Dust is removed and nothing in Part 
 
 Written in EARS form, the notation the handoff recommends adopting because the existing spec MCP servers
 already emit it. Each story carries its acceptance criteria. `US-n` maps to capability `Cn` from the
-handoff except where noted. No story names a specific product.
+handoff except where noted, and US-9, US-10, US-12 and US-13 have no `Cn` of their own. No story names a
+specific product.
 
 ### US-1 — Production failures into eval cases
 
@@ -117,10 +125,35 @@ handoff except where noted. No story names a specific product.
   suite's threshold, the user gave negative feedback, or a handoff fired.
 - The Layer **shall** cluster those traces and **shall** exclude any whose input is already represented
   in the eval suite.
-- The Layer **shall** present at most twenty candidate cases per run, each with the originating trace.
+- The Layer **shall** rank the surviving clusters by the rule below and **shall** present at most
+  `harvest_cap` candidates per run, each with the originating trace.
+- `harvest_cap` **shall** be a per-product setting with a default of twenty. It is a `provisional`
+  number until a product's own acceptance history justifies another, and the spec **shall not** treat
+  twenty as derived.
 - **If** a candidate's originating trace is no longer retrievable, **then** the Layer **shall** exclude it
   and state why.
 - The Layer **shall not** write a case into the suite until a human has ticked it.
+- Clusters that did not make the cap **shall** be retained with their rank and **shall** remain
+  queryable. The cap is a priority order, never a deletion.
+
+**The ranking rule, written out so it is not left to an implementer's taste.**
+
+"Best" is not knowable at selection time. Best would mean the cases whose addition most improves the
+suite's ability to catch future regressions, and that needs knowledge of what breaks next month. So the
+rule below ranks on what **is** knowable, and the real check is retrospective. See
+`harvested_case_yield` in B6.
+
+| Signal | Why | Cost |
+|---|---|---|
+| **Cluster size** | A failure mode seen eighty times outranks one seen once | A count |
+| **Clause proximity** | Prefer clusters touching a clause with a stated threshold, because those are what the Layer can later check | A join |
+| **Novelty** | Distance from the nearest existing suite case in embedding space, so near-duplicates sink | pgvector, already in the stack |
+| **Severity** | Where the source records one, a harder failure outranks a softer one | A field read |
+
+- A **per-cluster cap** **shall** apply, so one loud failure mode cannot consume the whole run.
+- The Layer **shall** show each candidate's rank and the signals behind it, so a human can disagree
+  with the ordering rather than only with the cases.
+- The Layer **shall not** present a ranking score as a measure of importance. It is a queue order.
 
 ### US-2 — Eval regression into a spec update
 
@@ -133,6 +166,17 @@ handoff except where noted. No story names a specific product.
   violation and the prompt version live at that time.
 - The Layer **shall** propose either a threshold change or a ticket, never both in one proposal.
 - The Layer **shall not** state that any change caused the violation.
+
+  **Why this is a hard rule and not a stylistic preference.** The Layer only sees timestamps and version
+  labels. Several things usually move at once, the prompt, the corpus, the model version, the traffic
+  mix and the judge, and nothing in the record separates them. Hard case H1 is the proof, where two
+  versions sharing one `prompt_sha` and one `corpus_sha` score differently, so something unversioned is
+  moving and no label explains it. Correlation with a timestamp is the ceiling, and it is still enough
+  to send a human to the right place to look. One confident wrong attribution destroys trust in
+  everything else the Layer says, which is why this sits in B3 rule 6 and B5 item 4 as well as here.
+
+  *Allowed.* "AC-8.3 first failed at v3, and `prompt_sha` changed at v3."
+  *Forbidden.* "The prompt change caused AC-8.3 to fail."
 
 ### US-3 — Promise versus enforcement
 
@@ -243,6 +287,25 @@ handoff except where noted. No story names a specific product.
 - Every pull request **shall** link the clause and the observation that justified it.
 - **If** a pull request would touch application logic, **then** the Layer **shall** open an issue instead.
 
+### US-13 — Which runs are the proof — the story the whole product exists for
+
+> As an AI PM, when I am told a bar was missed, I want to be handed the exact runs and cases that are
+> the evidence, so I never open a log or a trace list to check a claim myself.
+
+- **When** asked why a clause is in `missed`, the Layer **shall** return the failing runs, and within
+  them the individual failing cases, each with its `run_url` and, where the source has one, its
+  `trace_url`.
+- The Layer **shall** state the counts in the form the evidence supports, such as missed in 7 of 47 runs
+  with the worst at 80%, rather than a single averaged figure.
+- **Where** a case's trace body has been deleted at the source, the Layer **shall** return the stored
+  outcome and **shall** mark the trace unavailable, rather than omitting the case or presenting a dead
+  link as live.
+- **When** asked about any clause's history across versions, the Layer **shall** show which
+  `prompt_version` and `corpus_sha` each run carried, **and shall not** state that any of them caused
+  the change.
+- The Layer **shall not** require a live call to the eval platform to answer any of the above.
+- The Layer **shall not** assert a missed bar while returning no cases. See B3 rule 10.
+
 ## A8. Edge cases
 
 User-facing situations, distinct from the technical correctness cases in B8. Each needs a defined
@@ -279,6 +342,9 @@ statement        prose, no more than five sentences
 citations        one or more record ids, each resolvable to a URL
 confidence       high | medium | cannot_determine
 caveats          zero or more, always present when confidence is not high
+stale_sources    [{source_id, role, kind, last_sync_at, overdue_by}] — empty is
+                 the required state. A non-empty list caps confidence at medium
+                 and SHALL appear in `caveats` in words, not only as a field
 ```
 
 **Proposal.** A diff against a clause, an eval suite, or a CI config.
@@ -299,9 +365,15 @@ clause_ref       or null where the finding is that no clause exists
 product          which product it belongs to
 first_seen       the earliest observation exhibiting it, or null where not time-based
 current          whether the condition still holds
+as_of            the measured_at of the newest observation this rests on
+stale            true where `as_of` falls outside the source's freshness window.
+                 A stale finding is shown with its age, never silently as current
 summary          one paragraph, plain, no causal claim
-evidence         record ids, prefixed by kind: obs: clause: link: file: decision:
+evidence         record ids, prefixed by kind: obs: case: clause: link: file: decision:
                  prod_metric:
+                 case: ids resolve to individual failing cases, each carrying its
+                 run_url and, where the source has one, its trace_url. A finding
+                 that asserts a bar was missed SHALL cite the cases that missed it
 evidence_links   [{id, url}] — every id resolvable, see "Citations pin a commit" below
 unresolved       [] — ids in `evidence` that could not be resolved. Empty is the
                  required state; a non-empty list is displayed, never hidden
@@ -320,7 +392,9 @@ uncovered     reason ∈ no_assertion | no_metric | metric_without_clause
                        | not_measured_recently
 underspecified metric, value, band[]
 stalled_decision decision, text, days, where, url
-drift          metric, stated, observed, worst, runs_missed, runs_total
+drift          metric, stated, observed, worst, runs_missed, runs_total,
+               failing_cases[]  {case_id, outcome, run_url, trace_url|null,
+                                 trace_available: bool}
 ```
 
 `scope` is load-bearing and is the reason Finding 1 stayed hidden. A gate can enforce the right
@@ -339,7 +413,12 @@ product      id, org_id, key, name, pattern, status, created_at
              pattern is a DEFAULTS HINT, never a constraint
              status  ∈ registering | sources_bound | assertions_confirmed | live
 
-source       id, org_id, product_id, role, kind, config, status, last_sync_at
+source       id, org_id, product_id, role, kind, config, status, last_sync_at,
+             freshness_window, overdue_since
+             status ∈ healthy | overdue | failing | paused
+             freshness_window is how long a measurement from this source stays
+             usable. Set per source, because a nightly eval and a quarterly
+             human review are not comparable
              role ∈ spec | eval | code | ticket | production | decision
              kind ∈ file | repo | langfuse | braintrust | promptfoo | linear
                   | jira | notion | slack | datadog | prometheus | custom_mcp
@@ -363,9 +442,105 @@ observation  org_id, clause_ref, metric, value, source_kind,
              source_kind ∈ eval | production
              UNIQUE (org_id, clause_ref, metric, run_url)
 
+case_result  org_id, observation_id, case_id, outcome, input_redacted NULL,
+             trace_url, trace_id, measured_at
+             outcome ∈ pass | fail | error | skipped
+             UNIQUE (org_id, observation_id, case_id)
+             the per-case layer beneath an observation. THIS IS THE PROOF
+             a row for EVERY case, because the counts drive detection
+             input_redacted ONLY where outcome != pass. Null on a pass is
+             the correct state, not missing data
+
 proposal     as in B1
 audit_event  append-only, never updated, never deleted
 ```
+
+### The evidence spine, and the line it draws
+
+An `observation` is an aggregate, one number for one metric in one run. **An aggregate cannot be
+evidence.** "Escalation recall missed in 7 of 47 runs, worst 80%" is not derivable from a per-run
+average, and naming the runs and cases that are the proof is the Layer's primary job. So every
+observation carries the per-case layer beneath it.
+
+| Kept forever, in the Layer | Never in the Layer |
+|---|---|
+| Per clause per run, the metric, verdict, `prompt_sha`, `corpus_sha`, `run_url` | Production spans at volume |
+| **Per failing case, the case id, outcome, redacted input, trace id and trace url** | Token-level detail |
+| Clauses, bindings, links, proposals, audit events | Full prompt and completion text for every trace |
+| | Corpora, datasets, or any instrumentation SDK |
+
+**Bounded by suite size, not by traffic.** `case_result` holds one row per case per run, which is
+hundreds per run, not millions. This is why it does not make the Layer a tracing platform.
+
+**Three tiers, and the arithmetic that settles the volume objection.** The objection is that traces run
+to millions and that is why no eval platform keeps them forever. That is true of **production traces**
+and does not apply to **eval case results**, which are a different population four to five orders of
+magnitude smaller.
+
+| Tier | Retention | Volume |
+|---|---|---|
+| Eval case results | Every row, forever | Hundreds of thousands a year |
+| Production | The aggregate forever, plus only failures harvested into eval cases per US-1 | Hundreds a year |
+| Trace bodies | Never retained. A url and an id | Thirty bytes per case |
+
+A suite of 350 cases run 20 times a month is 84,000 rows a year per product. Ten products is under a
+million rows a year, which compresses to a few hundred megabytes in the columnar store. Per-tenant
+volume follows that tenant's eval suite size and **not** their traffic, so the figure scales by a
+constant when the Layer is sold rather than changing shape.
+
+**Multi-tenant changes nothing about the shape.** Each tenant's rows carry `org_id` and the store
+**shall** be partitioned by `org_id` and month, so the structure is identical across tenants and only
+the row count multiplies. That partitioning is what makes a per-tenant retention window and a
+tenant-scoped hard delete one statement each, which is AC-27 and audit item P9.
+
+**`input_redacted` only for failures.** A `case_result` row **shall** exist for every case, because the
+counts are what drift detection reads. `input_redacted` **shall** be populated only where `outcome` is
+not `pass`. Null on a passing row is the correct state and **shall not** be treated as missing data.
+Nobody asks to see the input of a case that passed, and at a typical pass rate this removes roughly 90%
+of stored text and the same proportion of retained personal data.
+
+**The trace body stays at the source. The outcome and the pointer are the Layer's.** Eval platforms
+delete traces on lower tiers, often at 30 to 90 days. A finding citing a deleted trace is B5 item 8, an
+unacceptable failure. So the Layer copies the outcome and the pointer at observation time, and they
+survive the deletion. When a human asks to see the conversation itself, the Layer fetches it live and,
+**if** it is past retention, **shall** state that the trace body is gone while still showing the
+recorded outcome. `trace_available` on the finding detail carries this.
+
+**Redaction before storage.** `input_redacted` passes through a redaction step before it is written.
+Storing raw inputs would make the Layer a database of someone's customer questions.
+
+**What this is not.** Not a trace viewer, not a span waterfall, not a retrieval index over trace bodies,
+not a dashboard. Those remain non-goals. Holding the evidence a finding cites is not re-hosting the eval
+platform, and refusing to hold it would make every finding unprovable the moment a retention window
+elapsed.
+
+### Silence must be visible in the answer, not only in a log
+
+A scheduled pull that dies raises no error. Observations simply stop arriving, the newest one for a
+clause ages, and a Layer that reads "the latest observation" keeps answering `met` with full confidence
+from a three week old number. Nothing is broken, nothing is logged as wrong, and every answer over that
+window is confidently false. This is the mechanism behind B5's "a drift that existed and was not
+surfaced", and it needs a rule rather than an operations habit.
+
+**The freshness rule.** Each `source` carries a `freshness_window`. A verdict of `met` or `missed`
+**shall** derive from an observation whose `measured_at` falls inside that window. Outside it the verdict
+**shall** degrade to `cannot_confirm`, with the reason naming the source and its age, and **shall not**
+remain at its last good value.
+
+**Degrade, never freeze.** The failure to avoid is a clause sitting at `met` forever because the thing
+that would have changed it stopped running. An absent measurement is not a passing one.
+
+**Overdue sources surface everywhere.** Where a source is past its window, `status` becomes `overdue`,
+`overdue_since` is set, and every answer and finding that rests on it carries the staleness in words.
+`stale_sources` on an answer and `as_of` plus `stale` on a finding exist for this.
+
+**A product can be healthy and uninformative at once.** All sources overdue is a perfectly consistent
+state, and the correct output is a high count of `cannot_confirm` rather than a reassuring dashboard.
+This is the same honesty the spec already demands of `cannot_confirm` generally.
+
+**This is the specification half of the operational dead man's switch.** The watchdog protects the data
+arriving. These rules protect the answer given when it stops. Either one alone leaves the product able
+to be quietly wrong.
 
 ### Onboarding is the only entry point
 
@@ -377,7 +552,7 @@ no default clause set. Every record in every table traces back to a source a hum
 | 1 | Register the product. A key, a name, an optional pattern hint | human | status `registering` |
 | 2 | Bind sources. At least one `spec` role and at least one `eval` role | human | status `sources_bound`. A product with neither cannot be reasoned about and stays at step 1 |
 | 3 | Import the spec. Parse into clauses with stable refs, every one `state: provisional`, `verdict: not_measured` | Layer | |
-| 4 | Backfill observations. Every historical run in the eval source, none skipped | Layer | |
+| 4 | Backfill observations **and their `case_result` rows**. Every historical run in the eval source, none skipped | Layer | A backfill that stores aggregates only is incomplete, because every later drift finding would be unprovable |
 | 5 | **Propose bindings, then stop.** The Layer matches observed metric names to clause metrics and presents each as a candidate assertion | Layer proposes, human decides | status `assertions_confirmed`. **Nothing past this step runs until every candidate has been confirmed or rejected** |
 | 6 | First measurement pass. Each bound clause gets a `verdict`. Unbound clauses get `cannot_confirm` | Layer | status `live` |
 | 7 | Findings, then proposals. Read-only findings first | Layer | proposals only after findings exist and have been read |
@@ -437,6 +612,16 @@ Without stable identity there is nothing to link to, and nothing else in this sp
    rather than generate suggestions about a product that does not exist.
 9. **Never invent a product.** Any clause, observation, binding or link whose `product_id` does not
    resolve to a registered product is rejected at write time, not cleaned up later.
+10. **Never assert a bar was missed without citing the cases that missed it.** A drift finding whose
+    `failing_cases` is empty while `runs_missed` is greater than zero is a defect, not a terse answer.
+    The whole point is that the human does not have to go and find them.
+11. **Never present a deleted trace as available.** Where the source has deleted the trace body, the
+    Layer states that and shows the recorded outcome. Silently dropping the evidence, or displaying a
+    dead link as live, is B5 item 8.
+12. **Never present a stale measurement as current, and never let an absent measurement read as a
+    passing one.** Outside a source's `freshness_window` the verdict degrades to `cannot_confirm` and
+    the staleness is stated in words. A clause holding `met` because its source stopped reporting is
+    the worst output this system can produce, because it is indistinguishable from good news.
 
 ## B4. Definition of a good proposal
 
@@ -461,7 +646,13 @@ Ranked. Any occurrence of the first three is a release blocker.
 5. A drift that existed and was not surfaced.
 6. A plaintext credential anywhere in storage or logs.
 7. A double-counted observation.
-8. A proposal whose evidence has been deleted by a retention policy and which still displays as live.
+8. A proposal or finding whose evidence has been deleted by a retention policy and which still
+   displays as live. The stored outcome survives the deletion, so there is no excuse for either losing
+   the finding or faking the link.
+9. A drift finding that asserts a missed bar and cannot name the cases that missed it.
+10. **A verdict shown as current but derived from an observation outside its source's freshness
+    window.** Ranked here rather than lower because it is worse than a refusal. A refusal tells the
+    reader to go and look. This tells them not to.
 
 ## B6. Success metrics
 
@@ -479,7 +670,13 @@ Ranked. Any occurrence of the first three is a release blocker.
 | Clauses with a verdict | **100%** | Every clause carries one, including `not_applicable` |
 | **Proposal acceptance rate** | **50% to 85%** | The core product health metric. See below |
 | Eval-case dedupe precision | **90%** | Of proposed cases, the share genuinely absent from the suite |
+| **Harvested case yield** | **40% or above** | Of cases a human accepted into a suite, the share that subsequently fail at least once. A case that never fails again added nothing. This is the only retrospective evidence that harvest ranking works, and near zero means noise is being harvested whatever the ranking rule claims. Measured no sooner than one full eval cycle after acceptance |
 | Chain completeness | **95%** | Of clauses whose six links all exist in connected sources, the share that resolve end to end |
+| **Evidence completeness** | **100%** | Of drift findings with `runs_missed > 0`, the share that name the failing cases. A finding that cannot show its proof is not a finding |
+| Case-to-trace pointer coverage | **100% where the source records one** | Measured against sources that emit a trace id. A source without tracing scores `not_applicable`, never a silent zero |
+| Unredacted PII in stored case inputs | **0** | No tolerance. The Layer stores other people's customer questions |
+| **Source freshness** | **100%** | Of `live` products, the share whose every source synced inside its `freshness_window`. Below 100% is not a failure of the Layer, it is a fact the Layer must report rather than hide |
+| Verdicts resting on a stale observation and shown as current | **0** | No tolerance. This is B5 item 10 |
 | Cannot-determine rate | **5% to 20%** | Below 5% it is guessing. Above 20% it is not earning its place |
 
 ### On the proposal acceptance band
@@ -555,6 +752,74 @@ hour, so the monthly figure alone is not a control.
 
 ---
 
+## B11. Tool surface
+
+Placed at the end of Part B rather than beside the data contract so that every existing reference to
+B2 through B10 stays valid. Read it alongside B1, which defines the shape every one of these returns.
+
+**Three tiers, and the split between them is a security boundary rather than a convenience.**
+
+```
+READS, exposed over MCP
+  list_products(org)                  -- what is onboarded at all, with status
+  get_product(key)                    -- sources, their status and staleness
+  source_status(product)              -- last_sync_at, overdue_since, per source
+  list_clauses(product, failing?, state?, verdict?)
+  get_clause(ref)                     -- statement, threshold, latest value,
+                                      --   links, history, as_of
+  trace_chain(entity)                 -- walks links in both directions
+  find_unenforced(product)            -- clause with no `enforces` link
+  find_uncovered(product)             -- clause with no `asserts` link, or a
+                                      --   metric with no clause
+  find_drift(product)                 -- observation violates comparator + value
+  find_stalled_decisions(org)         -- decision with no resulting action
+  metric_history(clause_ref, window)
+  failing_cases(clause_ref, window)   -- THE PROOF TOOL. The individual cases
+                                      --   that failed, each with run_url and
+                                      --   trace_url. This is AC-24
+  blocked_tickets(product)
+
+WRITES, exposed over MCP, none of which change the definition of correct
+  record_observation(clause_ref, value, source_kind, run_url,
+                     prompt_version, corpus_sha, measured_at)
+  record_case_results(observation_id, cases[])
+  propose_change(target, field, new_value, reason, evidence)
+  propose_link(from, to, link_type, reason)
+  propose_binding(product, metric, clause_ref, reason)
+
+HUMAN ONLY. NOT EXPOSED AS MCP TOOLS AT ALL
+  register_product(key, name, pattern?)
+  bind_source(product, role, kind, config, freshness_window)
+  confirm_binding(id, confirmed_by)
+  reject_binding(id, reason)
+  accept_proposal(id, decided_by)
+  reject_proposal(id, reason)
+```
+
+**Why the third tier is not merely unexposed but absent.** The approval boundary lives inside the
+server, not in an agent's prompt or its tool allowlist, so it holds regardless of how any agent is
+configured, who wired it up, or what an ingested document tells that agent to do. A boundary enforced
+by prompt is not a boundary.
+
+**`confirm_binding` is human-only for the same reason `accept_proposal` is, and this is easy to miss.**
+B3 rule 8 forbids any proposal for a product with no confirmed binding. An agent able to confirm its own
+bindings can manufacture that precondition and then propose freely, which turns the gate into a
+formality. The agent may **propose** a binding and must then stop. Exposing `confirm_binding` over MCP
+would be a P0, not a convenience.
+
+**Rules that hold for every tool.**
+
+1. Every tool returns exactly one of B1's four shapes. A tool that returns raw rows is a defect.
+2. No tool bypasses B3. The rules there are enforced in the server, not per call site.
+3. Every write produces an `audit_event`. A tool that can write without one is B5 item 1.
+4. Every tool is tenant-scoped in the data layer. No tool takes an `org_id` from its caller.
+5. Read tools answer from the Layer's own store. Where a live fetch is needed, such as retrieving a
+   trace body, that is stated in the response and its failure is a caveat rather than a silent omission.
+6. **The surface is the whole product.** Anything a human can learn from the Layer is learnable through
+   these tools, because Part C must pass over stdio with no UI and no Dust.
+
+---
+
 # PART C — EVIDENCE AND ACCEPTANCE
 
 ## C1. The three conditions that must be reproduced
@@ -569,6 +834,10 @@ build and never appears on a dashboard. `find_drift` must surface it from the fu
 sequence without being told where to look, and must record it as `enforced: true, scope: latest_only`
 rather than as unenforced. A system that reads only the newest run cannot find this, which is why
 step 4 of onboarding forbids skipping runs.
+
+It must also **name the failing cases**, each with its run and, where one exists, its trace. "Missed in
+7 of 47 runs, worst 80%" is the required precision, and it is not derivable from per-run aggregates.
+A finding that states the breach without the cases is half an answer and fails AC-22.
 
 **Condition 2, a sub-metric that never cleared its bar while the headline climbed.**
 A clause states a bar on a named subset of cases. The headline metric improves across versions and the
@@ -597,8 +866,8 @@ trackers, which hold the clause but not the runs.
 | AC-7 | Every answer in AC-3 to AC-6 carries resolvable citations, and none states a cause |
 | AC-8 | A cross-tenant read returns zero rows, proven by test |
 | AC-9 | No write occurs without an audit event, proven by test |
-| AC-10 | Every H1 to H12 case has a test, and each passes |
-| AC-11 | Every US-1 to US-12 acceptance criterion has a test, and each passes |
+| AC-10 | Every H1 to H16 case has a test, and each passes. H13 to H16 were added after this criterion was first written and are covered by it |
+| AC-11 | Every US-1 to US-13 acceptance criterion has a test, and each passes |
 | AC-12 | Every EC-1 to EC-12 edge case has a defined behaviour and a test |
 | AC-13 | Every clause carries both a `state` and a `verdict`, and the two are independently settable |
 | AC-14 | Every `evidence_links` url resolves to an immutable revision, and `unresolved` is empty across all findings |
@@ -609,6 +878,21 @@ trackers, which hold the clause but not the runs.
 | AC-19 | Two products onboarded into one org are queryable separately, and no finding on one cites a record belonging to the other |
 | AC-20 | A clean install with zero products onboarded answers every read tool with a refusal naming the missing product, and generates no proposals and no findings |
 | AC-21 | Onboarding a product the Layer has never seen, from only a `spec` file and an `eval` directory, requires no code change to the Layer |
+| AC-22 | Every drift finding with `runs_missed > 0` carries a non-empty `failing_cases`, each entry resolving to a stored `case_result` with its `run_url`. Proven by test |
+| AC-23 | A case whose trace has been deleted at the source still resolves to its stored outcome, and the finding reports `trace_available: false` rather than omitting or faking it |
+| AC-24 | `failing_cases`, as defined in B11, answers "which runs are the proof" for any clause in one call, with no log reading and no live call to the eval platform |
+| AC-25 | No `case_result.input_redacted` contains unredacted PII, proven by test over the fixture corpora |
+| AC-26 | Every case in a run has a `case_result` row, and `input_redacted` is null on every passing row and non-null on every failing row. Proven by test |
+| AC-27 | The case result store is partitioned by `org_id` and month, and a tenant-scoped delete removes that tenant's rows across every partition, proven by test. This is audit item P9 |
+| AC-28 | A source that stops delivering causes every verdict resting on it to degrade to `cannot_confirm` within one `freshness_window`, rather than freezing at its last value. Proven by test with a clock advanced past the window |
+| AC-29 | Every answer and finding resting on an overdue source names that source and its age in prose, not only in a field. Proven by test |
+| AC-30 | A product with every source overdue returns a full set of `cannot_confirm` verdicts and no `met`, and says why. Proven by test |
+| AC-31 | No tool in B11's human-only tier is reachable over MCP, proven by test against the served tool list. `confirm_binding` and `accept_proposal` in particular |
+| AC-32 | Every tool in B11 returns one of B1's four shapes, and no tool accepts an `org_id` from its caller. Proven by test across the whole surface |
+| AC-33 | `harvest_cap` is read from the product, defaults to twenty, and a changed value changes the number presented. Proven by test |
+| AC-34 | Clusters beyond the cap are retained with their rank and are queryable after the run. Proven by test |
+| AC-35 | Every candidate carries its rank and the signals behind it, and no ranking score is labelled as importance or severity of impact |
+| AC-36 | `harvested_case_yield` is computed for at least one product over at least one full eval cycle, and is a real number rather than null |
 
 AC-3 through AC-5 are the demo. They must pass with no UI and no agent, from committed data alone, and
 they must pass against **at least two independently onboarded products**, so that nothing in the
@@ -623,7 +907,10 @@ Carried from HANDOFF.md section 14 and unresolved.
 
 1. ClickHouse or Timescale for the observation store
 2. Which production metrics source, and does it expose MCP
-3. Does hosted Dust gate remote MCP servers by plan tier, and what auth does its credential policy accept
+3. ~~Does hosted Dust gate remote MCP servers by plan tier~~ **answered, yes, it is a paid tier**, which
+   changes nothing here because A6 requires every criterion in Part C to pass over stdio with no Dust.
+   **Still open**, what auth its credential policy accepts for a remote MCP server, which is a phase 4
+   question
 4. Current retention windows on the trace store. History is being lost now
 5. Pattern taxonomy beyond `rag` and `classifier`
 6. Whether target customers keep a machine-checkable spec at all. The largest commercial risk
@@ -747,5 +1034,83 @@ now the first thing built, not an afterthought.**
 
 **3. Dust's place was unreadable.**
 The build order mixed renting Dust with building the Layer, so Dust looked like a dependency. A6 now
-draws the boundary: Dust is a surface, the Layer is what answers and records, and every acceptance
+draws the boundary. Dust is a surface, the Layer is what answers and records, and every acceptance
 criterion in Part C must pass over stdio with no Dust present.
+
+**4. The evidence layer was specified away, which was the worst of the four.**
+v2 and the first draft of v3 described an `observation` as one number for one metric in one run, and
+stated that the Layer does not store traces. The first half of that is right, the Layer never re-hosts
+telemetry. The second half quietly removed the product's primary output. Naming **which runs and which
+cases are the proof** of a degradation is the main thing the Layer is for, and "missed in 7 of 47 runs,
+worst 80%" cannot be derived from aggregates. An implementer following the earlier text would have built
+something that detects a breach and cannot show it.
+
+Added: `case_result` in B2, the evidence spine table and the line it draws, the three retention tiers
+with the arithmetic behind them, the rule that `input_redacted` is populated only for failures,
+`failing_cases[]` on the drift detail, the `case:` evidence prefix, B3 rules 10 and 11, B5 item 9,
+US-13, and AC-22 through AC-27.
+The non-goal was narrowed from "no traces" to its correct scope, which is no instrumentation, no span
+ingestion, no trace viewer, no dataset management and no retrieval index over trace bodies. Holding the
+evidence a finding cites is not re-hosting an eval platform, and the retention windows at the source are
+precisely why the copy has to exist.
+
+**5. Nothing stopped a stale measurement from reading as a current one.**
+Found while explaining the reference repo's watchdog, which is handoff audit item P11. The operational
+half, detecting that a scheduled pull has stopped, existed there. The specification half did not, so a
+dead pull would have left clauses sitting at `met` from a three week old number, with full confidence
+and no error anywhere. That is the exact mechanism behind B5's "a drift that existed and was not
+surfaced", and it is the worst output this product can produce because it is indistinguishable from good
+news.
+
+Added: `freshness_window`, `overdue_since` and a `status` enum on `source`, the "silence must be visible
+in the answer" rules in B2, `stale_sources` on the answer shape, `as_of` and `stale` on the finding
+shape, B3 rule 12, B5 item 10, two B6 metrics, and AC-28 through AC-30. The governing sentence is that
+**an absent measurement is not a passing one**, and the governing behaviour is to degrade rather than
+freeze.
+
+**6. The specification cited a tool surface it never defined.**
+AC-24 named `failing_cases` while Part B listed no tools anywhere, so the tool surface existed only in
+the handoff. That left the human-only boundary on `accept_proposal` and `reject_proposal`, which is a
+security property, asserted in a build note rather than in the document that defines correctness.
+
+Added B11, at the end of Part B so that every existing reference to B2 through B10 stays valid. It
+carries the three tiers, the rules that hold for every tool, and AC-31 and AC-32. Writing it out
+surfaced one thing that had not been stated anywhere: **`confirm_binding` must be human-only for the
+same reason `accept_proposal` is**, because an agent able to confirm its own bindings can manufacture
+the precondition B3 rule 8 requires and then propose freely. That is now explicit, and AC-31 tests it.
+
+**7. US-1 said "pick twenty representatives" and defined neither the twenty nor the picking.**
+Two defects in one line. The cap was a hardcoded `provisional` number, which is exactly the thing this
+product is built to catch in other people's specs, and "representatives" left the selection criterion
+entirely to the implementer while reading as though it were specified.
+
+Added: `harvest_cap` as a per-product setting defaulting to twenty and explicitly labelled provisional,
+a written ranking rule over cluster size, clause proximity, novelty and severity with a per-cluster cap,
+a requirement to retain and expose the clusters that missed the cap, a requirement to show each
+candidate's rank and signals so a human can disagree with the ordering, and AC-33 through AC-36.
+
+**The honest part is that ranking cannot be validated at selection time**, since it would require
+knowing what breaks next. So `harvested_case_yield` was added to B6, which measures the share of
+accepted cases that subsequently fail at least once. A case that never fails again added nothing, and
+near zero yield means noise is being harvested regardless of what the ranking rule claims. The
+proposal acceptance band already catches the gross failure, because selection below 50% acceptance is
+provably bad without any further metric.
+
+**8. Two criteria had drifted out of step with the parts of the document they index.**
+Found while reconciling the build against this revision rather than by reading the document, which is
+the point of doing the reconciliation.
+
+AC-10 read "every H1 to H12 case has a test" while B8's hard-case table runs to **H16**. AC-11 was
+brought up to US-13 in this revision and AC-10 was not, so H13 to H16 carried no criterion requiring a
+test even though three of them are the cases the reference fixtures exercise most. Corrected to H16,
+with a note that those four arrived after the criterion was first written, so a reader does not take
+the change for a widening of scope.
+
+The handoff's stack table routed observations and case results to ClickHouse or Timescale, which reads
+as a settled dependency and contradicts the standing decision to use Postgres behind an
+`ObservationStore` interface. The arithmetic added to B2 in item 4 above is what settles it: ten
+products under a million rows a year does not need a columnar engine, and AC-27's partitioning by
+`org_id` and month is Postgres declarative partitioning. The handoff now says Postgres, partitioned,
+behind the interface, and names the columnar move as **open question 1** rather than a decision already
+taken. Nothing here changes; the store choice was never specified in this document, which is why the
+interface is the part that matters.

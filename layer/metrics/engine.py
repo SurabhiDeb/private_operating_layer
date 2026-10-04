@@ -35,8 +35,48 @@ import math
 from dataclasses import dataclass, field as dc_field
 from typing import Any
 
+from layer.core.redact import redact
 from layer.metrics.pointer import MISSING, resolve, resolve_field
 from layer.metrics.predicates import BadDefinition, coerce, evaluate, to_bool
+
+
+@dataclass(frozen=True)
+class CaseOutcome:
+    """One case's result inside one run. **This is the evidence a finding cites.**
+
+    An aggregate cannot be proof: "escalation recall was missed in 7 of 47 runs, worst
+    80%" is not derivable from a per-run average, and PRD AC-22 requires a drift finding
+    to name the cases that missed the bar. So every aggregation that has a per-case
+    notion of passing emits one of these per case.
+
+    `input_redacted` is masked at this point, not later. The field is named for what it
+    holds and there is no path that puts raw text into it, so a customer's own words
+    never reach a candidate object or a traceback. It is populated only where the
+    outcome is not `pass`, per AC-26: nobody asks to see the input of a case that
+    passed, and at a typical pass rate that removes roughly 90% of stored text.
+
+    `case_id` beginning with `#` is positional, used only where the source names no id
+    for its rows. It is marked rather than silently formatted like a real id, because a
+    positional reference stops being correct the moment the row order changes — but
+    dropping the row instead would break the counts that drift detection reads.
+    """
+
+    case_id: str
+    outcome: str
+    input_redacted: str | None = None
+    trace_id: str | None = None
+    trace_url: str | None = None
+
+    @property
+    def counted(self) -> bool:
+        """Whether this case is in the metric's denominator.
+
+        `skipped` means the case was present in the run and outside what this metric
+        measures — a case irrelevant to recall, for instance. It is stored so the run
+        is fully accounted for, and excluded from the arithmetic so that
+        `passed == number of passes` and `total == number of counted cases` both hold.
+        """
+        return self.outcome != SKIPPED
 
 
 @dataclass(frozen=True)
@@ -47,6 +87,11 @@ class MetricValue:
     verdict rule is a Wilson interval and it needs n. For a percentile or a mean they
     are None, and such a clause can only ever reach `cannot_confirm` — which is
     correct: a p95 from eleven requests is not evidence about a latency promise.
+
+    `cases` is the per-case layer beneath the number. It is empty for tier 1, where the
+    source hands over a number and no rows, and for `count`, `mean` and `percentile`,
+    where no per-case notion of passing exists — a case does not pass or fail a p95.
+    Emitting `skipped` rows there would store a row per case asserting nothing.
     """
 
     metric: str
@@ -55,10 +100,15 @@ class MetricValue:
     passed: int | None = None
     total: int | None = None
     detail: dict = dc_field(default_factory=dict)
+    cases: tuple[CaseOutcome, ...] = ()
 
     @property
     def measurable(self) -> bool:
         return True
+
+    @property
+    def counted_cases(self) -> tuple[CaseOutcome, ...]:
+        return tuple(case for case in self.cases if case.counted)
 
 
 @dataclass(frozen=True)
@@ -79,6 +129,15 @@ class Unmeasurable:
 
 
 Result = MetricValue | Unmeasurable
+
+#: PRD B2's `case_result.outcome`. Mirrored here rather than imported from
+#: `layer.db.models`, because an adapter must not depend on the database — that
+#: separation is what lets every adapter be tested without one.
+PASS = "pass"
+FAIL = "fail"
+ERROR = "error"
+SKIPPED = "skipped"
+CASE_OUTCOMES = (PASS, FAIL, ERROR, SKIPPED)
 
 #: Reasons, matching the `uncovered` detail vocabulary in PRD B1.
 NO_METRIC = "no_metric"
@@ -218,14 +277,16 @@ def _over_rows(document: Any, definition: dict, metric: str, unit: str | None, k
             raise BadDefinition("'rate' needs a where predicate")
         passed = sum(1 for r in rows if evaluate(definition["where"], r, coercions))
         return _proportion(metric, passed, len(rows), unit,
-                           failing=_ids(rows, definition, coercions, definition["where"], False))
+                           failing=_ids(rows, definition, coercions, definition["where"], False),
+                           cases=_cases_by_predicate(rows, definition, coercions, definition["where"]))
 
     if kind == "accuracy":
         actual, expected = _pair(definition)
         predicate = {"field": actual, "op": "eq", "other_field": expected}
         passed = sum(1 for r in rows if evaluate(predicate, r, coercions))
         return _proportion(metric, passed, len(rows), unit,
-                           failing=_ids(rows, definition, coercions, predicate, False))
+                           failing=_ids(rows, definition, coercions, predicate, False),
+                           cases=_cases_by_predicate(rows, definition, coercions, predicate))
 
     return _confusion(rows, definition, metric, unit, kind, coercions)
 
@@ -250,15 +311,31 @@ def _confusion(rows, definition, metric, unit, kind, coercions) -> Result:
 
     tp = fp = fn = 0
     missed: list = []
-    for row in rows:
+    cases: list[CaseOutcome] = []
+    for ordinal, row in enumerate(rows, start=1):
         actual_pos, expected_pos = classify(row)
         if actual_pos and expected_pos:
             tp += 1
+            in_denominator, satisfied = True, True
         elif actual_pos and not expected_pos:
             fp += 1
+            # A false positive is in precision's denominator and outside recall's.
+            in_denominator, satisfied = kind == "precision", False
         elif not actual_pos and expected_pos:
             fn += 1
             missed.append(_id_of(row, definition))
+            in_denominator, satisfied = kind == "recall", False
+        else:
+            # A true negative is in neither denominator: the run exercised the case and
+            # this metric does not measure it. Stored as `skipped` so the run is fully
+            # accounted for, and excluded from the arithmetic.
+            in_denominator, satisfied = False, False
+        outcome = (
+            _outcome_for(row, definition, coercions, satisfied)
+            if in_denominator
+            else SKIPPED
+        )
+        cases.append(_case(row, definition, ordinal, outcome))
 
     denominator = tp + fn if kind == "recall" else tp + fp
     if denominator == 0:
@@ -272,7 +349,7 @@ def _confusion(rows, definition, metric, unit, kind, coercions) -> Result:
     detail = {"tp": tp, "fp": fp, "fn": fn}
     if kind == "recall" and missed:
         detail["missed_ids"] = [m for m in missed if m is not None]
-    return _proportion(metric, tp, denominator, unit, extra=detail)
+    return _proportion(metric, tp, denominator, unit, extra=detail, cases=cases)
 
 
 def _numeric(rows, definition, metric, unit, kind) -> Result:
@@ -315,12 +392,13 @@ def _nearest_rank(values: list[float], p: float) -> float:
 # -- helpers --------------------------------------------------------------------
 
 
-def _proportion(metric, passed, total, unit, extra=None, failing=None) -> MetricValue:
+def _proportion(metric, passed, total, unit, extra=None, failing=None, cases=()) -> MetricValue:
     detail = dict(extra or {})
     if failing:
         detail["failing_ids"] = failing
     return MetricValue(
-        metric, passed / total, unit or "ratio", passed=passed, total=total, detail=detail
+        metric, passed / total, unit or "ratio", passed=passed, total=total,
+        detail=detail, cases=tuple(cases),
     )
 
 
@@ -333,6 +411,125 @@ def _pair(definition: dict) -> tuple[str, str]:
 
 def _id_of(row: Any, definition: dict) -> Any:
     return resolve_field(row, definition.get("id_field", "id"))
+
+
+# -- the per-case layer ---------------------------------------------------------
+
+
+def _case_id(row: Any, definition: dict, ordinal: int) -> str:
+    """The source's own id for this row, or a marked positional one.
+
+    A row with no id cannot be dropped: the counts are what drift detection reads, and
+    a missing row would make `runs_total` disagree with the stored evidence. So the
+    position is used and marked with `#`, which says plainly that it is positional and
+    stops being meaningful if the rows are reordered.
+    """
+    identifier = _id_of(row, definition)
+    if identifier is MISSING or identifier is None or identifier == "":
+        return f"#{ordinal}"
+    return str(identifier)
+
+
+def _case_input(row: Any, definition: dict, outcome: str) -> str | None:
+    """The redacted input, for a case this metric measured and that did not pass.
+
+    Three things are deliberate. There is **no default** field name, unlike `id_field`
+    and `rows`: guessing which field holds the customer's own words and storing it
+    would be the one default in this codebase whose failure mode is retaining other
+    people's personal data nobody asked for. Redaction happens here rather than at the
+    database, so raw text never travels. And a case nobody will ask about stores
+    nothing, which the schema also refuses (AC-26).
+
+    **`skipped` stores no input either, and that was a defect for an hour.** AC-26 and
+    PRD B2 phrase the rule as "only where `outcome` is not `pass`", so the first
+    version of this function suppressed the input on a pass alone — and then stored the
+    text of every true negative, which for one fixture's recall metric was nine of
+    fourteen cases per run. The reasoning behind the rule is that nobody asks to see
+    the input of a case that passed; nobody asks to see the input of a case this metric
+    never measured either. Caught by printing real output rather than by a test, which
+    is why the CHECK now covers it too.
+    """
+    if outcome not in (FAIL, ERROR):
+        return None
+    field = definition.get("input_field")
+    if not field:
+        return None
+    raw = resolve_field(row, field)
+    if raw is MISSING or raw is None:
+        return None
+    return redact(str(raw), extra_patterns=_extra_redactions(definition))
+
+
+def _extra_redactions(definition: dict) -> list[tuple[str, str]] | None:
+    """Tenant-supplied patterns, as (name, regex) pairs. No fixed list covers what
+    another company's domain leaks — a policy number, an internal customer reference."""
+    extra = definition.get("redact_patterns")
+    if not extra:
+        return None
+    if isinstance(extra, dict):
+        return list(extra.items())
+    return [tuple(pair) for pair in extra]
+
+
+def _case_trace(row: Any, definition: dict) -> tuple[str | None, str | None]:
+    """The pointer to the conversation itself, which stays at the source.
+
+    Copied at observation time precisely because the source will delete the body: a
+    finding citing a deleted trace is PRD B5 item 8, and the pointer plus the recorded
+    outcome are what let the Layer say the body is gone while still showing what
+    happened (AC-23). Where a source records no trace at all, both are None and AC-24
+    reports `not_applicable` rather than a silent zero.
+    """
+    trace_id = resolve_field(row, definition.get("trace_id_field", "trace_id"))
+    trace_url = resolve_field(row, definition.get("trace_url_field", "trace_url"))
+    return (
+        None if trace_id in (MISSING, None, "") else str(trace_id),
+        None if trace_url in (MISSING, None, "") else str(trace_url),
+    )
+
+
+def _case(row: Any, definition: dict, ordinal: int, outcome: str) -> CaseOutcome:
+    trace_id, trace_url = _case_trace(row, definition)
+    return CaseOutcome(
+        case_id=_case_id(row, definition, ordinal),
+        outcome=outcome,
+        input_redacted=_case_input(row, definition, outcome),
+        trace_id=trace_id,
+        trace_url=trace_url,
+    )
+
+
+def _outcome_for(row: Any, definition: dict, coercions: dict, satisfied: bool) -> str:
+    """`pass`, or `fail` unless the source itself recorded an error on this row.
+
+    An error is distinguished from a failure because they mean different things to a
+    human triaging the run: one is the product being wrong, the other is the harness
+    not having run. It never overrides a pass — the metric counted that row as passing,
+    and relabelling it here would make the stored cases disagree with the number they
+    are the evidence for.
+    """
+    if satisfied:
+        return PASS
+    field = definition.get("error_field")
+    if field:
+        raw = resolve_field(row, field)
+        if raw not in (MISSING, None, "", False):
+            return ERROR
+    return FAIL
+
+
+def _cases_by_predicate(rows, definition, coercions, predicate) -> tuple[CaseOutcome, ...]:
+    """One case per row in the metric's population, for `rate` and `accuracy`.
+
+    The population is the rows that survived the subset filter, which is why a metric
+    on "the critical cases" stores the critical cases and not the whole run. The rest
+    of the run belongs to whatever metric measures it.
+    """
+    out = []
+    for ordinal, row in enumerate(rows, start=1):
+        satisfied = evaluate(predicate, row, coercions) is True
+        out.append(_case(row, definition, ordinal, _outcome_for(row, definition, coercions, satisfied)))
+    return tuple(out)
 
 
 def _ids(rows, definition, coercions, predicate, wanted: bool) -> list:

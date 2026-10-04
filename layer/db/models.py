@@ -17,7 +17,7 @@ security does it. See `layer/core/db.py`.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -28,6 +28,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Index,
+    Interval,
     String,
     Text,
     UniqueConstraint,
@@ -42,6 +43,13 @@ from layer.core.db import Base
 # PRD B2. Fixed sets the Layer's own logic depends on.
 PRODUCT_STATUSES = ("registering", "sources_bound", "assertions_confirmed", "live")
 SOURCE_ROLES = ("spec", "eval", "code", "ticket", "production", "decision")
+#: PRD B2. Closed because the Layer branches on it: an `overdue` source degrades every
+#: verdict resting on it (B3 rule 12), and a `paused` one is excluded from that rule
+#: rather than reported as a failure.
+SOURCE_STATUSES = ("healthy", "overdue", "failing", "paused")
+#: PRD B2's `case_result.outcome`. Closed: the counts drive drift detection, so a fifth
+#: value would silently change what `runs_missed` means.
+CASE_OUTCOMES = ("pass", "fail", "error", "skipped")
 
 # Open vocabularies, validated in Python so a new one needs no migration.
 KNOWN_SOURCE_KINDS = (
@@ -88,6 +96,7 @@ class Product(Base):
         CheckConstraint(
             "onboarding_step BETWEEN 1 AND 7", name="ck_product_onboarding_step"
         ),
+        CheckConstraint("harvest_cap > 0", name="ck_product_harvest_cap"),
         Index("ix_product_org", "org_id"),
     )
 
@@ -105,6 +114,13 @@ class Product(Base):
         String(32), nullable=False, default="registering"
     )
     onboarding_step: Mapped[int] = mapped_column(nullable=False, default=1)
+    #: PRD US-1. How many eval-case candidates a harvest may present per run. The
+    #: default of twenty is `provisional` by this specification's own definition —
+    #: a number nobody measured — and stays that way until a product's acceptance
+    #: history justifies another. It is a column rather than a constant precisely
+    #: because a hardcoded cap is the thing this product exists to catch in other
+    #: people's specs.
+    harvest_cap: Mapped[int] = mapped_column(nullable=False, default=20, server_default=text("20"))
     created_at: Mapped[datetime] = _ts()
 
     org: Mapped[Org] = relationship(back_populates="products")
@@ -122,11 +138,34 @@ class Source(Base):
 
     `pinned_rev` is the immutable revision every citation from this source is built
     from. A branch name here is a defect (AC-14).
+
+    `freshness_window` is how long a measurement from this source stays usable, and it
+    is per source because a nightly eval and a quarterly human review are not
+    comparable. Outside it, any verdict resting on this source degrades to
+    `cannot_confirm` (B3 rule 12, AC-28). **An absent measurement is not a passing
+    one**, and a clause holding `met` because its source stopped reporting is the worst
+    output this system can produce, because it is indistinguishable from good news.
+
+    `status` is a closed set here where it was free text before, because the Layer now
+    branches on it. A window of null means this source is not held to one, which is the
+    honest state for a source whose cadence nobody has stated — not a licence to treat
+    its age as irrelevant.
     """
 
     __tablename__ = "source"
     __table_args__ = (
         CheckConstraint("role IN " + str(SOURCE_ROLES), name="ck_source_role"),
+        CheckConstraint("status IN " + str(SOURCE_STATUSES), name="ck_source_status"),
+        # A source cannot be overdue without a window to be overdue against, and
+        # `overdue_since` without `status = overdue` is a half-written transition.
+        CheckConstraint(
+            "(status <> 'overdue') OR (overdue_since IS NOT NULL AND freshness_window IS NOT NULL)",
+            name="ck_source_overdue_coherent",
+        ),
+        CheckConstraint(
+            "freshness_window IS NULL OR freshness_window > interval '0'",
+            name="ck_source_freshness_positive",
+        ),
         Index("ix_source_product_role", "org_id", "product_id", "role"),
     )
 
@@ -142,9 +181,17 @@ class Source(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="bound")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="healthy", server_default=text("'healthy'")
+    )
     pinned_rev: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: PRD B2. Null means no stated cadence, so staleness is reported without a
+    #: verdict being degraded by a window nobody set.
+    freshness_window: Mapped[timedelta | None] = mapped_column(Interval, nullable=True)
+    overdue_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -436,6 +483,98 @@ class Observation(Base):
     created_at: Mapped[datetime] = _ts()
 
 
+class CaseResult(Base):
+    """The per-case layer beneath an observation. **This is the proof.**
+
+    An `observation` is an aggregate, one number for one metric in one run, and an
+    aggregate cannot be evidence. "Escalation recall was missed in 7 of 47 runs, worst
+    80%" is not derivable from a per-run average, and naming the runs and the individual
+    cases that are the proof is the Layer's primary job (PRD US-13, AC-22). So every
+    observation carries these rows beneath it.
+
+    **A row for every case, not only the failures.** The counts are what drift detection
+    reads, so a table of failures alone would make `runs_total` unknowable from this
+    table and every rate unrecomputable (AC-26).
+
+    **`input_redacted` only where the outcome is not `pass`.** Null on a passing row is
+    the correct state and is never missing data: nobody asks to see the input of a case
+    that passed, and at a typical pass rate this removes roughly 90% of stored text and
+    the same proportion of retained personal data. The CHECK enforces that half, because
+    it is a privacy guarantee rather than a convention.
+
+    It does **not** enforce the converse. AC-26 asks for non-null on every failing row,
+    and that is only answerable where the source carries an input at all: the third
+    fixture's per-case rows hold a reference, a prediction, a label and a duration, and
+    no text whatsoever. A CHECK demanding text there would make an honest source
+    unstorable, and a placeholder would be fabricated evidence. So "the source declares
+    no input" is reported as `not_applicable`, the same answer AC-24 requires for a
+    source with no tracing, and the non-null half is asserted per source in the tests.
+
+    **The trace body stays at the source; the outcome and the pointer are the Layer's.**
+    Eval platforms delete traces on lower tiers, often at 30 to 90 days, and a finding
+    citing a deleted trace is PRD B5 item 8. These rows survive that deletion, so the
+    finding stays provable and the Layer can say the body is gone while still showing
+    the outcome it recorded (AC-23, B3 rule 11).
+
+    **Why it is partitioned, and what that cost.** AC-27 requires partitioning by
+    `org_id` and month: monthly ranges, each hash-split on `org_id`. Postgres requires
+    every unique constraint on a partitioned table to contain the partition keys, so
+    B2's `UNIQUE (org_id, observation_id, case_id)` carries `measured_at` as well. That
+    stays idempotent only because `measured_at` is copied from the observation rather
+    than read off the clock — one run has one time — and a test asserts exactly that.
+    There is no surrogate id for the same reason: a primary key must contain the
+    partition keys, so the composite key *is* the identity, and a case is cited as
+    `case:<observation_id>/<case_id>`, which is path-shaped like every other identifier
+    here.
+    """
+
+    __tablename__ = "case_result"
+    __table_args__ = (
+        CheckConstraint("outcome IN " + str(CASE_OUTCOMES), name="ck_case_outcome"),
+        # The privacy half of AC-26, and the only half a CHECK can honestly carry.
+        #
+        # Written as a positive permission rather than `outcome <> 'pass'`, because the
+        # negative form let a `skipped` case keep its text: a case this metric did not
+        # measure is one nobody will ask about, so storing its input is retained
+        # personal data with no reader — the same argument the rule makes about a pass.
+        CheckConstraint(
+            "input_redacted IS NULL OR outcome IN ('fail', 'error')",
+            name="ck_case_input_only_for_failures",
+        ),
+        Index("ix_case_observation", "org_id", "observation_id"),
+        Index("ix_case_id", "org_id", "case_id", "measured_at"),
+        {"postgresql_partition_by": "RANGE (measured_at)"},
+    )
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("org.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    observation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("observation.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    case_id: Mapped[str] = mapped_column(String(128), primary_key=True, nullable=False)
+    #: Part of the primary key because it is the range partition key, not because a
+    #: case has two outcomes at two times. It is the observation's own `measured_at`.
+    measured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True, nullable=False
+    )
+
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Redacted before it is written, never after. Storing raw inputs would make the
+    #: Layer a database of someone else's customer questions (PRD B6: zero tolerance).
+    input_redacted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Provenance for the pointer, kept even once the body behind it is gone.
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    trace_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = _ts()
+
+
 class EnforcementFact(Base):
     """What CI actually checks, as opposed to what the spec says.
 
@@ -672,5 +811,5 @@ class AuditEvent(Base):
 #: `org` is absent deliberately: it is the registry of tenants, not tenant content.
 TENANT_TABLES = (
     "product", "source", "binding", "clause", "clause_identity", "observation",
-    "enforcement_fact", "entity", "proposal", "link", "audit_event",
+    "case_result", "enforcement_fact", "entity", "proposal", "link", "audit_event",
 )

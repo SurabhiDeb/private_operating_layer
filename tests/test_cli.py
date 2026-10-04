@@ -159,6 +159,47 @@ class TestTheSteps:
                             "--kind", "repo", "--config", eval_config(repo))
         assert "wf: sources_bound" in out
 
+    def test_a_freshness_window_is_stated_at_the_point_a_human_binds_the_source(
+        self, capsys, org, repo
+    ):
+        """PRD B11: `bind_source(product, role, kind, config, freshness_window)`. This is
+        the only place anybody says how often a source is expected to speak, so the
+        window is typed here and the consequence of it is printed back."""
+        common = ["--org", org, "--as", ACTOR]
+        run_cli(capsys, "product", "register", *common, "wf", "--ref-prefix", "WF")
+        _, out, _ = run_cli(capsys, "source", "bind", *common, "wf", "--role", "spec",
+                            "--kind", "repo", "--config", spec_config(repo),
+                            "--freshness", "30d")
+        assert "freshness window 30d" in out
+        assert "cannot_confirm" in out
+
+    def test_a_source_with_no_stated_cadence_says_so_rather_than_looking_fresh(
+        self, capsys, org, repo
+    ):
+        """Silence about a cadence is not a claim that the data is current. B5 item 10
+        ranks a verdict shown as current from a stale reading above a refusal in cost,
+        so the absence of a window has to be visible."""
+        common = ["--org", org, "--as", ACTOR]
+        run_cli(capsys, "product", "register", *common, "wf", "--ref-prefix", "WF")
+        _, out, _ = run_cli(capsys, "source", "bind", *common, "wf", "--role", "spec",
+                            "--kind", "repo", "--config", spec_config(repo))
+        assert "no freshness window stated" in out
+
+    def test_an_unreadable_freshness_window_is_refused_rather_than_guessed(
+        self, capsys, org, repo
+    ):
+        """A bare `30` could be minutes or days. Wrong by a factor of 1,440, a window
+        either degrades every verdict at once or never degrades one, and both read as
+        the Layer being broken rather than as a policy somebody set."""
+        common = ["--org", org, "--as", ACTOR]
+        run_cli(capsys, "product", "register", *common, "wf", "--ref-prefix", "WF")
+        code, _, err = run_cli(capsys, "source", "bind", *common, "wf", "--role", "spec",
+                               "--kind", "repo", "--config", spec_config(repo),
+                               "--freshness", "30")
+        assert code == 1
+        assert err.startswith("refused:")
+        assert "cannot read '30' as a duration" in err
+
     def test_import_and_backfill_report_their_arithmetic(self, capsys, org, repo):
         common = ["--org", org, "--as", ACTOR]
         run_cli(capsys, "product", "register", *common, "wf", "--ref-prefix", "WF")

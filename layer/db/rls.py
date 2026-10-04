@@ -117,7 +117,14 @@ def revoke_statements(role: str, tables: tuple[str, ...]) -> list[str]:
 # -- append-only -----------------------------------------------------------------
 
 #: Tables that may be inserted into and never changed afterwards.
-APPEND_ONLY_TABLES: tuple[str, ...] = ("audit_event",)
+#:
+#: `case_result` joins the audit log here because it is the evidence a finding cites.
+#: A row that can be edited after the fact is not proof of anything, and the one thing
+#: that legitimately changes about a case — whether its trace body still exists at the
+#: source — is resolved live and reported, never written back over the record (B3
+#: rule 11). Erasure uses the same narrow hatch, which is what makes PRD EC-9's
+#: tenant-scoped hard delete possible on a table that is otherwise immutable.
+APPEND_ONLY_TABLES: tuple[str, ...] = ("audit_event", "case_result")
 
 _APPEND_ONLY_FUNCTION = f"""
 CREATE OR REPLACE FUNCTION layer_append_only() RETURNS trigger AS $$
@@ -165,12 +172,25 @@ def append_only_statements(tables: tuple[str, ...]) -> list[str]:
     return out
 
 
-def drop_append_only_statements(tables: tuple[str, ...]) -> list[str]:
+def drop_append_only_statements(
+    tables: tuple[str, ...], *, drop_function: bool
+) -> list[str]:
+    """Remove the triggers, and the shared function only when asked.
+
+    `drop_function` has no default on purpose. The function is shared by every
+    append-only table, so the migration that introduced it is the only one that may
+    drop it; a later migration dropping it while an earlier table's triggers still
+    depend on it fails with `cannot drop function ... because other objects depend on
+    it`, and the whole downgrade rolls back. That is the same class of defect as the
+    `tables` defaults removed above, and it was caught the same way — by running the
+    downgrade rather than assuming it.
+    """
     out: list[str] = []
     for table in reversed(tables):
         out += [
             f"DROP TRIGGER IF EXISTS {table}_append_only_truncate ON {table}",
             f"DROP TRIGGER IF EXISTS {table}_append_only_rows ON {table}",
         ]
-    out.append("DROP FUNCTION IF EXISTS layer_append_only()")
+    if drop_function:
+        out.append("DROP FUNCTION IF EXISTS layer_append_only()")
     return out
