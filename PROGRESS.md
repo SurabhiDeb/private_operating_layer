@@ -11,11 +11,14 @@ no agent and no Dust. What follows phase 3 is **not** the handoff's order any mo
 **The specification was revised on 3 October, after step 8, and it reopened finished
 work.** Steps 4 to 8 were complete against the specification as it then stood. They are
 not complete against the specification as it stands now. What changed and what it costs
-is in "The 3 October revision" below; the step table marks each affected step rather than
-leaving a reader to infer it from a date. Nothing already built turned out to be wrong —
-the additions sit beneath and beside it — but a step whose scope grew is not a step that
-is still done, and recording it as done would be the quiet kind of false report this
-product exists to catch.
+is in "The 3 October revision" below; the step table marks each affected step, and **each
+affected step also opens with an indented note saying what in it still holds and what the
+revision superseded**, so a reader landing in the middle of the file is not misled by a
+section that was accurate when it was written. Steps 4, 5, 6b, 7 and 8 carry one.
+
+Nothing already built turned out to be wrong — the additions sit beneath and beside it —
+but a step whose scope grew is not a step that is still done, and recording it as done
+would be the quiet kind of false report this product exists to catch.
 
 **How to read the status column.** A step is `done` only when its tests pass and the
 result has been quoted, never when the code merely exists. Each finished step below records
@@ -54,11 +57,19 @@ criteria now, not 21: the revision added AC-22 to AC-36.
 | Criteria with tests that do **not** yet meet them | AC-22 and AC-23 are proven at the schema and the engine, and not end to end: nothing yet stores a case row or cites one in a finding. AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists |
 | Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
-| User stories | **none yet.** AC-11 asks for a test per US-1 to US-13 criterion and the `story` marker is unused. Step 13's job |
+| User stories | **No test carries the `story` marker**, which is the one of `pytest.ini`'s five that never got wired up. The PRD's A7 holds all thirteen stories, US-1 to US-13; what is missing is traceability from each of their criteria to a test, which is exactly what AC-11 asks for. Several are already covered in substance — US-3's "CI does not check what the spec promises" is what the AC-4 tests exercise — so this is a labelling gap rather than untested behaviour, and step 13 closes it by marking what exists and writing what does not |
 
-The second row is the one to read. A marker says a criterion has a test; it does not say
-the criterion is met. AC-22 asks that every drift finding with `runs_missed > 0` carry a
-non-empty `failing_cases`, and no finding carries one yet.
+Two cautions about reading this table, because it is built from markers rather than prose
+and a marker is a weaker claim than it looks.
+
+**A marker says a criterion has a test; it does not say the criterion is met.** AC-22 asks
+that every drift finding with `runs_missed > 0` carry a non-empty `failing_cases`, and no
+finding carries one yet — hence the second row.
+
+**An absent marker does not mean absent behaviour.** The last row is the clearest case: the
+stories are in the specification and much of what they ask for works, but nothing connects
+a story's criterion to the test that covers it, so AC-11 cannot be answered by running the
+suite. That connection is the deliverable, not the behaviour.
 
 **AC-3, AC-4 and AC-5 are the demo, and they pass.** PRD C2 requires them to do so "with no
 UI and no agent, from committed data alone, and against at least two independently onboarded
@@ -418,6 +429,14 @@ $ .venv/bin/python -m pytest
 
 ## Step 4 — Migration 2: the record itself. Done.
 
+> **Extended by step 9, 4 Oct.** Nothing below is retracted. Two additions: `case_result`
+> makes the eight tables nine and the tenant tables twelve, and `source` gains
+> `freshness_window`, `overdue_since` and a CHECKed `status` — so **the free-text `status` this
+> migration wrote as `bound` is no longer a legal value**, and migration 5 maps it to `healthy`.
+> "Three departures from PRD B2's data contract" below is now four: the fourth is that
+> `case_result`'s unique constraint carries `measured_at`, because Postgres requires a
+> partitioned table's unique constraint to contain its partition keys. See step 9.
+
 **What it had to achieve.** The eight tables the read half reasons over, with isolation and
 append-only enforcement landing alongside them rather than after.
 
@@ -538,6 +557,13 @@ leak into the next transaction on a pooled connection, `enforced: true` with
 ---
 
 ## Step 5 — The metric engine. Done.
+
+> **Extended by step 10, 4 Oct.** Everything below still holds. What it does not mention is
+> the per-case layer: the 3 October revision requires a finding to name the individual cases
+> that are its proof (AC-22), so `rate`, `accuracy`, `recall` and `precision` now also emit a
+> `CaseOutcome` per case, and `MetricValue` carries them. The tiers, the refusals and the
+> fixture numbers in this section are unchanged. **The table below headed "Where the engine
+> declines" is still complete for the number; it says nothing about the cases.** See step 10.
 
 **What it had to achieve.** Turn a document the Layer has never seen into a measured
 number, for any product, without learning anything about that product.
@@ -742,6 +768,14 @@ eight of its bars including the two-bar sentence, the prose band and the `£900`
 
 ### 6b — The eval adapter. Done.
 
+> **Reopened by step 10, 4 Oct.** The reconciliation, the classification distinction and both
+> reference conditions below are unchanged and still the point of this section. But the
+> revision makes a backfill that stores aggregates only **incomplete**: handoff §12 phase 1 now
+> requires `observation` rows *and* the `case_result` rows beneath them, because otherwise
+> every later drift finding is unprovable. So "Two departures from PRD B2" below is now a list
+> of two out of three — the third is that an observation is no longer the whole of what this
+> adapter emits. The lifting of case ids, inputs and trace pointers is **not yet built**.
+
 **What it had to achieve.** Turn committed run records into observations, and earn AC-2:
 "no duplicates and **no run omitted**, proven by counting source runs against stored
 observations".
@@ -932,6 +966,18 @@ $ .venv/bin/python -m pytest
 
 ## Step 7 — Onboarding. Done.
 
+> **Reopened by step 10, and extended by step 9, 4 Oct.** Two changes to what is below.
+>
+> Step 4 of the seven, the backfill, is now specified to write `case_result` rows as well, so
+> the `141 observations stored` line in the run below is half the arithmetic a finished
+> backfill reports. `persist.py` does not write case rows yet.
+>
+> `bind_source` has gained a `freshness_window` argument, which is PRD B11's signature for it,
+> and `source.status` now defaults to `healthy` rather than the free-text `bound` this step
+> wrote. The seven steps, the gates, the five defects and the verdict counts are otherwise
+> exactly as recorded. **The `cannot_confirm` counts below will change again at step 11**, when
+> a verdict resting on a measurement outside its source's window degrades rather than holding.
+
 **What it had to achieve.** Make onboarding the only way content enters, with each of PRD
 B2's seven steps gated by the one before it, and a product reaching `live` with no code
 change to the Layer.
@@ -1027,6 +1073,24 @@ is written in a different idiom. Nothing about any of them appears anywhere in `
 ---
 
 ## Step 8 — The five findings. Done.
+
+> **Reopened by steps 10 and 11, 4 Oct. Read this before the condition 1 output below.**
+>
+> The summary quoted below ends `Failing case ids across these runs: 14.` Those ids come from
+> `observation.detail["missed_ids"]`, a JSONB blob holding ids and nothing else — no outcome,
+> no trace pointer, and nothing a citation can resolve to. Against the revised AC-22 that is
+> **half an answer**: a drift finding must carry `failing_cases[]` of
+> `{case_id, outcome, run_url, trace_url, trace_available}`, each entry resolving to a stored
+> `case_result`. So condition 1 is still reproduced, and it is no longer reproduced *to
+> specification*. `failing_cases[]` is not built yet.
+>
+> Step 11 then adds `as_of` and `stale` to every finding, and retires the global
+> `STALE_AFTER = timedelta(days=30)` this step introduced in favour of the per-source
+> `freshness_window` — so the `uncovered / not_measured_recently` behaviour described below is
+> provisional.
+>
+> Unchanged: the five queries, the drift-versus-verdict distinction, the two refusals, the
+> no-causal-language test, and both reference conditions as facts about the data.
 
 **What it had to achieve.** Turn the stored record into the conditions a reader cares about,
 with citations that open, and no sentence that states a cause. This is the milestone the whole
