@@ -1,3 +1,23 @@
+## WHAT THIS FILE IS. A blank form, not code. Nothing here ever runs.
+## `alembic revision -m "..."` copies this file, fills in every ${...} slot,
+## and saves the result into versions/. Every file in versions/ came from here.
+##
+## upgrade()   moves the database forward. Alembic usually writes this for you
+##             by diffing the models against the live database.
+## downgrade() puts it back. YOU write this by hand, and skipping it is how a
+##             migration quietly becomes one-way.
+##
+## revision      this migration's own id
+## down_revision the id of the one before it
+## Those two are the chain Alembic walks to decide what order to run in.
+##
+## Edit the generated files in versions/, never this one. Change this file only
+## when you want EVERY future migration to look different.
+##
+## These lines are Mako comments (##) so they are stripped at render time and
+## never appear in a generated migration. A plain # comment would be copied
+## into all of them.
+
 """${message}
 
 Revision ID: ${up_revision}
