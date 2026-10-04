@@ -120,6 +120,25 @@ a `@server.tool()` decorator, and transport is an argument to `run()` — `"stdi
 `"streamable-http"` in phase 4. Code written from memory would have imported a module that
 no longer exists. It also confirms phase 4 is one argument rather than a rewrite.
 
+Plain version, point by point.
+
+The open question. Handoff item 4 said the MCP software library had been reorganised and that no one should write code from memory about it. That was a warning, not a fact.
+
+What they did instead of guessing. Installed the real library and asked it to describe itself. inspect.signature is a Python command meaning "tell me what arguments this function actually takes". Reading the library rather than recalling it.
+
+What it turned out to be.
+
+Thing	What it is now
+The main class	MCPServer, not FastMCP
+Where it lives	mcp.server.mcpserver
+How you add a tool	A decorator, @server.tool(), written above the function
+How you choose the connection	An argument to run(). "stdio" now, "streamable-http" later
+
+Why it mattered. Code written from memory would have tried to import something that no longer exists and failed on the first line. Ten minutes of checking saved a confusing failure.
+
+The bonus finding, which is the more valuable half. I claimed phase 4 was "one argument, not a rewrite". That was reasoning. This proves it, because the connection type really is just a parameter on run(). So moving from a terminal to Dust changes one word.
+
+Want me to mark handoff item 4 resolved with these specifics, the way we did item 1?
 ---
 
 ## Step 2 — Migration 1 and provable tenant isolation. Done.
