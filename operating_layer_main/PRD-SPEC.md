@@ -428,8 +428,17 @@ binding      org_id, product_id, metric, clause_ref, confirmed_by, confirmed_at
              nothing is proposed for a product with no confirmed bindings
 
 clause       ref, org_id, product_id, kind, statement, rationale,
-             metric, comparator, value, k, state, verdict, version, superseded_by
+             metric, comparator, value, value_high, unit, direction, k,
+             state, verdict, version, superseded_by
              kind    ∈ threshold | rule | contract | non_goal | hard_case
+             unit      ∈ ratio | percent | count | seconds | ms | currency | none
+             direction ∈ higher_is_better | lower_is_better | within_band
+             value_high is the upper edge for a band, else null
+             comparator + value alone CANNOT express a real spec target.
+             "3% to 8%", "under 1 second" and "under £1,200" all appear in
+             real specs, and each needs a unit and a direction to be
+             comparable at all. Storing 0.08 with no unit is how a spec
+             silently becomes 8 or 8% depending on who reads it
              state   ∈ provisional | measured | ratified
              verdict ∈ met | missed | cannot_confirm | not_applicable | not_measured
 
@@ -441,6 +450,16 @@ observation  org_id, clause_ref, metric, value, source_kind,
              prompt_version, corpus_sha, run_url, measured_at
              source_kind ∈ eval | production
              UNIQUE (org_id, clause_ref, metric, run_url)
+
+enforcement_fact
+             org_id, clause_ref, ci_file, ci_revision, metric_checked,
+             comparator_checked, value_checked, scope, partial, partial_note,
+             observed_at
+             scope ∈ latest_only | latest_shipped | all_runs | undetermined
+             WHAT CI ACTUALLY CHECKS, as read from the code, versus what the
+             clause states. AC-4 and AC-15 are unanswerable without it, and
+             H14 is undetectable without `scope`. Omitted from earlier
+             revisions of this contract, which was an error
 
 case_result  org_id, observation_id, case_id, outcome, input_redacted NULL,
              trace_url, trace_id, measured_at
@@ -576,6 +595,20 @@ surfaces `uncovered` findings with reason `no_assertion`. It proposes nothing.
 A `ratified` clause can still be `cannot_confirm`. A `met` clause can still be `provisional`, which
 means it is passing a bar nobody ever justified. Collapsing these into one field hides both cases.
 
+**How the verdict boundary is computed, which earlier revisions left unsaid.** A point estimate against
+a bar is not a verdict, because 9 of 10 and 900 of 1000 are not the same evidence. The Layer **shall**
+compute a **Wilson score interval** at `Z_95 = 1.959963984540054` over the per-case outcomes and assign
+
+| Verdict | Condition |
+|---|---|
+| `met` | the interval's **lower** bound clears the bar |
+| `missed` | the interval's **upper** bound falls below the bar |
+| `cannot_confirm` | the interval straddles the bar, which thin evidence usually produces |
+
+This is why `cannot_confirm` dominating is correct rather than evasive. A suite of eleven critical cases
+cannot distinguish 90% from 100% at any honest confidence, and saying so is the right answer. The
+constant is pinned rather than derived so that the Layer and a customer's own scorer agree to the digit.
+
 **`cannot_confirm` is expected to dominate**, and that is the honest state rather than a defect. In
 the reference implementation it is 365 of 540 verdicts. A system that reports `met` or `missed` for
 everything is guessing.
@@ -586,8 +619,13 @@ Every `evidence_links` url resolves to an immutable revision, not a branch. A fi
 `blob/main/SPEC.md` becomes wrong the moment someone edits the file, and the reader cannot tell.
 A finding that cites `blob/ef07ac9/SPEC.md` stays true forever.
 
-**Storage.** Observations in a columnar store (ClickHouse or Timescale). Clauses, links and entities in
-Postgres. Spec text and dedupe vectors in pgvector. Keyword search in `tsvector`.
+**Storage.** Observations and case results in **Postgres, partitioned by `org_id` and month, behind an
+`ObservationStore` interface.** The arithmetic above puts ten products under a million rows a year,
+which does not need a columnar engine, and AC-27's partitioning is ordinary Postgres declarative
+partitioning. ClickHouse or Timescale is the move **when that arithmetic stops holding**, and is an open
+question rather than a settled dependency. **The interface is the part that matters**, because swapping
+the engine beneath it is then a configuration change rather than a rewrite of every query. Clauses,
+links and entities in Postgres. Spec text and dedupe vectors in pgvector. Keyword search in `tsvector`.
 
 **Identity is the load-bearing requirement.** A clause ref must survive a human rewording the statement.
 Without stable identity there is nothing to link to, and nothing else in this spec works.
@@ -881,8 +919,8 @@ trackers, which hold the clause but not the runs.
 | AC-22 | Every drift finding with `runs_missed > 0` carries a non-empty `failing_cases`, each entry resolving to a stored `case_result` with its `run_url`. Proven by test |
 | AC-23 | A case whose trace has been deleted at the source still resolves to its stored outcome, and the finding reports `trace_available: false` rather than omitting or faking it |
 | AC-24 | `failing_cases`, as defined in B11, answers "which runs are the proof" for any clause in one call, with no log reading and no live call to the eval platform |
-| AC-25 | No `case_result.input_redacted` contains unredacted PII, proven by test over the fixture corpora |
-| AC-26 | Every case in a run has a `case_result` row, and `input_redacted` is null on every passing row and non-null on every failing row. Proven by test |
+| AC-25 | No `case_result.input_redacted` contains unredacted PII, proven against a **purpose-built corpus containing each PII shape**, with the forbidden strings listed by hand so the assertion does not share its patterns with the code it checks. A sweep over the reference corpora is kept as a weaker regression guard and **is not sufficient on its own**, because those corpora contain no PII shape at all and the test passes whether the redactor works or not |
+| AC-26 | Every case in a run has a `case_result` row, and the database enforces the half of the rule that is a privacy guarantee, that **an input may exist only where `outcome` is not `pass`**. Where a source's per-case rows carry no input text at all, that is reported as `not_applicable` and **not** as a missing value. Proven by test |
 | AC-27 | The case result store is partitioned by `org_id` and month, and a tenant-scoped delete removes that tenant's rows across every partition, proven by test. This is audit item P9 |
 | AC-28 | A source that stops delivering causes every verdict resting on it to degrade to `cannot_confirm` within one `freshness_window`, rather than freezing at its last value. Proven by test with a clock advanced past the window |
 | AC-29 | Every answer and finding resting on an overdue source names that source and its age in prose, not only in a field. Proven by test |
@@ -893,6 +931,9 @@ trackers, which hold the clause but not the runs.
 | AC-34 | Clusters beyond the cap are retained with their rank and are queryable after the run. Proven by test |
 | AC-35 | Every candidate carries its rank and the signals behind it, and no ranking score is labelled as importance or severity of impact |
 | AC-36 | `harvested_case_yield` is computed for at least one product over at least one full eval cycle, and is a real number rather than null |
+| AC-37 | `enforcement_fact` records what each CI file actually checks, and AC-4 and AC-15 are answered from it rather than inferred at query time. A clause whose gate cannot be read records `scope: undetermined` rather than a guess |
+| AC-38 | A clause stating a band, a duration or a currency amount round-trips through `comparator`, `value`, `value_high`, `unit` and `direction` without loss, proven by test over at least one of each |
+| AC-39 | Verdicts are assigned from a Wilson score interval at the pinned Z, and a clause with few cases returns `cannot_confirm` rather than `met` on a favourable point estimate. Proven by test |
 
 AC-3 through AC-5 are the demo. They must pass with no UI and no agent, from committed data alone, and
 they must pass against **at least two independently onboarded products**, so that nothing in the
@@ -1114,3 +1155,59 @@ products under a million rows a year does not need a columnar engine, and AC-27'
 behind the interface, and names the columnar move as **open question 1** rather than a decision already
 taken. Nothing here changes; the store choice was never specified in this document, which is why the
 interface is the part that matters.
+
+## D4. What the phase 1 to 3 build found, and what it changed here
+
+Six divergences surfaced by reconciling a working implementation against this document rather than by
+re-reading it. **Four are things this specification omitted, and the implementation was right.** Two are
+criteria that could not be met as written. Recorded as amendments rather than left as silent divergence
+in code, because a spec the build quietly ignores has stopped being a spec.
+
+**1. `enforcement_fact` was missing from B2, and AC-4 and AC-15 are unanswerable without it.**
+The contract held clauses, observations and case results but nothing recording **what CI actually
+checks**. Comparing a stated threshold against an enforced one requires storing the enforced one, and
+H14, which is Finding 1's root cause, is undetectable without its `scope`. Added to B2 with
+`scope: undetermined` for a gate that cannot be read, plus AC-37. This was an omission in the data
+contract, not an implementation detail.
+
+**2. `comparator` plus `value` cannot hold a real spec target.**
+Real targets include "3% to 8%", "under 1 second" and "under £1,200". A band needs an upper edge, and a
+bare `0.08` becomes 8 or 8% depending on who reads it. Added `value_high`, `unit` and `direction` to
+`clause`, plus AC-38. This one would have corrupted data rather than merely limited it.
+
+**3. The verdict boundary was never specified.**
+`met`, `missed` and `cannot_confirm` were defined as concepts with no rule for choosing between them,
+which left every implementer to invent one. Now a **Wilson score interval** at a pinned
+`Z_95 = 1.959963984540054`, matching the reference fixtures' own `shared/stats.py`, with `met` when the
+lower bound clears the bar and `missed` when the upper bound falls below it. This also explains why
+`cannot_confirm` dominating is correct, since eleven critical cases cannot separate 90% from 100% at any
+honest confidence. Added to B2 with AC-39.
+
+**4. B2's storage note still said columnar after the handoff was corrected.**
+Item 8 above fixed the handoff's stack table and left the same sentence standing here. Now Postgres,
+partitioned by `org_id` and month, behind the `ObservationStore` interface, with the columnar move named
+as an open question. The interface, not the engine, is the specified part.
+
+**5. AC-25 proved nothing.**
+It required no unredacted PII "proven by test over the fixture corpora", and 876 input fields across
+both reference products contain no email, phone, card, sort code, postcode, IBAN or National Insurance
+number. The authors wrote clean synthetic text, so the test passes whether the redactor works or not.
+Now a purpose-built corpus containing each shape, with the forbidden strings listed by hand so the
+assertion does not share its patterns with the code it checks. The corpus sweep is kept and labelled as
+the weaker regression guard it always was.
+
+**6. AC-26 could not be met as written, and is amended.**
+It required `input_redacted` to be non-null on every failing row. A fixture's per-case rows carry a
+reference, a prediction, a label and a duration, and **no text at all**. A constraint demanding text
+there makes an honest source unstorable, and writing a placeholder would be fabricated evidence, which
+B5 ranks fourth among unacceptable failures. So the half that is a privacy guarantee is enforced in the
+database, that an input may exist only for a case that did not pass, and "this source declares no input"
+is reported as `not_applicable`, which is the same answer AC-24 already requires for a source with no
+tracing. **The amendment is deliberate and the code matches it**, rather than the code diverging and the
+document pretending otherwise.
+
+**On ordering, which belongs to the handoff but is settled here.** The build places **phase 5, the write
+half, before phase 4, the Dust transport**, against the handoff's order, and that is correct. D2 of this
+document says the acceptance rate must be known before a UI is built around proposals, phase 4 adds no
+capability beyond one transport argument, and Dust over read-only findings is precisely the read-only
+dashboard the handoff forbids. The handoff's build order now reflects this.

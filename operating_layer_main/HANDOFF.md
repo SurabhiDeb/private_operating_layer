@@ -314,6 +314,20 @@ Public repo, pushed 10 Sep 2026. FastAPI + Postgres + pgvector + SQLAlchemy + La
    See the four-store split in section 6.
 2. **Row-level isolation on `org_id` everywhere.** Enforce in the data access layer, not per query,
    so it cannot be forgotten. Add Postgres RLS if the tenancy boundary needs to be provable.
+
+   *In plain terms.* One database holds every customer's rows, and every row carries a label saying who
+   owns it. If each query has to remember to filter on that label, one query that forgets is a leak.
+   Putting the filter in the single piece of code every query passes through makes the safe thing
+   automatic rather than a discipline. **RLS is the same idea one floor lower**, where the database
+   itself refuses to hand over rows that are not yours even if the application is buggy or someone
+   connects directly. One hotel, many guests. Asking each guest to open only their own door is the
+   first option. Making the lock reject the wrong card is RLS.
+
+   *Phasing.* `org_id` on every table from the first migration so nothing needs migrating later, and
+   RLS switched on with it, since the phase 1 to 3 surfaces pass org context as an explicit argument
+   and have no authentication to lean on. **Real auth arrives with the HTTP transport**, and the write
+   half needs **attribution** rather than authentication, a `user` table with a role so `decided_by`
+   is a real person.
 3. **Auth becomes load-bearing.** Single-tenant per server made auth almost decorative. Multi-tenant
    needs real session and org scoping, and eventually SSO.
 4. **`deploy/` systemd per client no longer applies.** One deployment, many orgs.
@@ -376,10 +390,26 @@ entity          -- existing table, new entity_type values
 
   entity_type ∈ requirement | decision | clause | assertion | config_value
 
-clause extras   -- either columns on entity or a side table keyed to it
-  ref, product, kind, statement, rationale,
-  metric, comparator, value, k, state
+clause          -- a DEDICATED table, not entity rows with a side table
+  ref, org_id, product_id, kind, statement, rationale,
+  metric, comparator, value, value_high, unit, direction, k, state, verdict
   state ∈ provisional | measured | ratified
+  unit      ∈ ratio | percent | count | seconds | ms | currency | none
+  direction ∈ higher_is_better | lower_is_better | within_band
+  comparator + value ALONE CANNOT hold a real target. "3% to 8%",
+    "under 1 second" and "under £1,200" all appear in real specs, and a bare
+    0.08 becomes 8 or 8% depending on who reads it.
+  verdict is computed from a WILSON SCORE INTERVAL at Z_95 =
+    1.959963984540054 over the per-case outcomes. met when the lower bound
+    clears the bar, missed when the upper bound falls below it, else
+    cannot_confirm. See PRD B2.
+
+enforcement_fact -- NEW. WHAT CI ACTUALLY CHECKS, read from the code.
+  org_id, clause_ref, ci_file, ci_revision, metric_checked,
+  comparator_checked, value_checked, scope, partial, partial_note, observed_at
+  scope ∈ latest_only | latest_shipped | all_runs | undetermined
+  Omitted from earlier revisions, which was an error. AC-4 and AC-15 are
+  unanswerable without it, and H14 is undetectable without `scope`.
 
 link            -- NEW, general, this is what C5 traverses
   org_id, from_entity, to_entity, link_type, confidence, created_by, created_at
@@ -790,20 +820,35 @@ Wrap the phase 2 queries plus `list_clauses`, `get_clause`, `trace_chain`, `metr
 `failing_cases` and `record_observation` as MCP tools. **stdio only.** Test from Claude Code in a terminal. Every PRD
 acceptance criterion must pass here, with no Dust present. This is the product.
 
-**Phase 4. HTTP, a token, and Dust as a client.**
-Same server behind HTTP with token auth, registered in hosted Dust as a remote MCP server. Dust now
-provides the chat, the durable agent loop, the scheduled triggers and the per-tool approval prompt.
-Nothing about the Layer changes. C2, C3 and C4 now work conversationally rather than in a terminal.
-
-**Phase 5. The write half, which is the unvalidated half.**
-`propose_change` and `propose_link` write to `PendingEntity`, the existing critic scores them, the
-existing queue holds them, and `accept_proposal` and `reject_proposal` stay human-only and are never
-exposed as MCP tools. **Gated on B3 rule 8:** no proposal is generated for any product that is not
-`live` with at least one confirmed binding.
+**Phase 4. The write half, which is the unvalidated half.**
+**Reordered. This was phase 5 and now comes before the Dust transport.** `propose_change`,
+`propose_link` and `propose_binding` write to the proposal queue, the critic scores them, and
+`accept_proposal`, `reject_proposal` and `confirm_binding` stay human-only and are never exposed as MCP
+tools. **Gated on B3 rule 8:** no proposal is generated for any product that is not `live` with at
+least one confirmed binding. Needs **attribution** but not authentication, which is a `user` table
+with a role and an `--as <email>` argument so `decided_by` is real. Sessions and bearer tokens wait
+for the transport phase.
 
 Done means: twenty proposals decided by a human and an acceptance rate that is a real number in the
 50% to 85% band. That is AC-16, and it is the single most important unmeasured thing in this project.
 If the rate is below 50% the proposals are noise and no UI should be built around them.
+
+**Why this moved ahead of Dust.** Three reasons, and they are decisive.
+1. The PRD's D2 says plainly that the acceptance rate must be known **before a UI is built around
+   proposals**. Putting a chat surface first inverts that.
+2. The transport phase adds **no capability**. It is one `run(transport=...)` argument on a server that
+   already works.
+3. **Dust over read-only findings is the read-only dashboard section 15 forbids.** With no write half
+   behind it, the conversational surface is exactly the thing this project refuses to build.
+
+**Phase 5. HTTP, a token, and Dust as a client.**
+Same server behind HTTP with real auth, registered in hosted Dust as a remote MCP server. Dust provides
+the chat, the durable agent loop, the scheduled triggers and the per-tool approval prompt. Nothing about
+the Layer changes. The capabilities now work conversationally rather than in a terminal.
+
+Worth a **half-day spike before phase 4**, not a full phase, to answer open questions 1 and 2 on plan
+tier and credential policy. Those cannot be answered by reasoning and the answers may change the
+sequencing. Spike, record, come back.
 
 **Phase 6. The remaining sources.**
 Notion requirements, Slack decisions, Datadog production metrics, each as a new `source` row with a
@@ -812,9 +857,10 @@ new `kind` and no new concepts. `trace_chain` lights up, which is C5. `find_stal
 built wrong.
 
 **Phase 7. Operations.**
-Scheduled pulls, OTel tracing, the retrieval gate, the release gate pattern, all from section 7. If a
-calibrated critic is wanted, this is where Jev is trialled behind the existing critic interface, after
-the acceptance rate from phase 5 exists as a baseline to compare against.
+Scheduled pulls, OTel tracing, the retrieval gate, the release gate pattern, all from section 7. Also
+P11, wiring the watchdog's `alert()` to a real channel. If a calibrated critic is wanted, this is where
+Jev is trialled behind the existing critic interface, after the acceptance rate from the write half
+exists as a baseline to compare against.
 
 **Later, only if the brand and pricing need owning.** The Dust fork, per section 9.
 
@@ -843,6 +889,10 @@ which is a process failure worth noting.
 | **Wrote v1 and v2 around the two `chatbot-lab` products throughout** | **Wrong. Those are test fixtures.** The Layer is product agnostic and must onboard any AI product from its own spec and eval sources with no code change. Fixture names may not appear outside `tests/` |
 | **Specified proposals, the acceptance band and the approval loop, but never specified how a product enters the Layer** | **Wrong, and it is the defect that matters most.** Anyone implementing v2 would start generating proposals against nothing. Onboarding, `product`, `source` and `binding` are now phase 1, and no proposal may exist for a product with zero confirmed bindings |
 | **Build order mixed renting Dust with building the Layer, phase by phase** | **Dust is a surface, not a dependency.** Phases 1 to 3 have no Dust at all and must pass over stdio. Dust enters at phase 4 as an MCP client and nothing in the Layer changes when it does |
+| **Build order put the Dust transport before the write half** | **Reversed by the phase 1 to 3 build, correctly.** The PRD's own D2 requires the acceptance rate before a UI is built on proposals, the transport adds no capability beyond one argument, and Dust over read-only findings is the read-only dashboard section 15 forbids. The write half is now phase 4 and the transport phase 5, with a half-day spike for the Dust open questions |
+| **B2's storage note and this report's stack table routed observations to ClickHouse or Timescale** | **Contradicted the arithmetic in the same documents.** Ten products come to under a million rows a year, which is ordinary partitioned Postgres. Now **Postgres behind an `ObservationStore` interface**, with the columnar engine named as open question 1. The interface is the specified part, so swapping the engine later is configuration rather than a rewrite |
+| **The data contract omitted what CI actually checks, and `comparator + value` could not hold a real target** | **Both found by building it.** `enforcement_fact` added, because AC-4 and AC-15 are unanswerable without it and H14 is undetectable without its `scope`. `value_high`, `unit` and `direction` added to `clause`, because "3% to 8%" and "under £1,200" are real spec targets and a bare `0.08` silently becomes 8 or 8%. See PRD D4 |
+| **The verdict boundary was defined as a concept with no rule** | **Now a Wilson score interval** at a pinned Z, matching the fixtures' own `shared/stats.py`. This is also why `cannot_confirm` dominating is correct rather than evasive, since eleven critical cases cannot separate 90% from 100% at any honest confidence |
 | **"The Layer does not store traces, spans, prompts or datasets", and an observation is "one number bound to one clause"** | **Half right, and the wrong half was load-bearing.** Correct that the Layer never re-hosts telemetry, a trace viewer or a dataset. Wrong that an aggregate number is enough. Naming **which runs and which cases are the proof** is the product's main job, and "missed in 7 of 47 runs" is unsayable without per-case outcomes. Added `case_result`, the `failing_cases` tool, and the evidence spine in section 4. Written down because this line, left standing, would have stopped the implementer storing the one thing the product exists to show |
 | **"Dust handles the product half, I build the AI tracing and eval half"** | **Wrong on both counts, and the most dangerous misreading so far.** Linear and Notion hold the product half. Langfuse and Braintrust hold the AI half. Dust holds neither and is a client of both. **I build only the binding between them.** Building the eval half means building a tracing platform, which section 15 forbids outright. Written out as the three-way split in section 4 |
 
