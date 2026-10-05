@@ -474,7 +474,10 @@ acceptance criteria. Kept here because the handoff is what gets pasted into a bu
 
 ```
 reads
-  list_products(org)                  -- what is onboarded at all, with status
+  list_products()                     -- what is onboarded at all, with status
+                                      -- NO org argument anywhere. The org binds to the
+                                      -- process at startup. An argument would be a
+                                      -- documented route across the tenant boundary.
   get_product(key)                    -- sources, their status and staleness
   source_status(product)              -- last_sync_at, overdue_since, per source
   list_clauses(product, failing?, state?, verdict?)
@@ -484,7 +487,7 @@ reads
   find_uncovered(product)             -- C6, clause with no `asserts` link,
                                       --     or production metric with no clause
   find_drift(product)                 -- latest observation violates comparator + value
-  find_stalled_decisions(org)         -- C7, decision with no resulting PR, ticket or spec change
+  find_stalled_decisions()            -- C7, decision with no resulting PR, ticket or spec change
   metric_history(clause_ref, window)  -- C8
   blocked_tickets(product)            -- C4
   failing_cases(clause_ref, window)   -- THE PROOF TOOL. Returns the individual cases

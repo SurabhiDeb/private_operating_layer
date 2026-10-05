@@ -315,7 +315,7 @@ behaviour before build, not after.
 |---|---|---|
 | EC-1 | First run, no spec exists anywhere | Offer US-9's derivation. Never present an empty state as nothing to do |
 | EC-2 | The spec document cannot be parsed | Say which part failed and import the rest. Never fail the whole import |
-| EC-3 | Cold start, one eval run and no history | Every clause stays `provisional`. No drift claims from a single point |
+| EC-3 | Cold start, one eval run and no history | **The answer leads with the absence of history**, so a single point never reads as a trend. "Missed in 1 of 1 runs, worst 80%" is the shape of a trend at the moment a reader can least tell, and is forbidden. *Amended:* an earlier version also said every clause stays `provisional`, which contradicts B2's definition of `measured` as "a baseline run exists". One run **is** a baseline, so the clause becomes `measured` and the restraint belongs in the prose, not in the state |
 | EC-4 | A source disconnects mid-run | Partial result, clearly marked, naming what is missing. Never a silent partial |
 | EC-5 | A human rejects nearly every proposal | Surface the acceptance rate against its band. Falling below 50% is a product failure to report, not to hide |
 | EC-6 | Two people act on the same proposal at once | First decision wins, second is told what happened and by whom |
@@ -825,7 +825,7 @@ B2 through B10 stays valid. Read it alongside B1, which defines the shape every 
 
 ```
 READS, exposed over MCP
-  list_products(org)                  -- what is onboarded at all, with status
+  list_products()                     -- what is onboarded at all, with status
   get_product(key)                    -- sources, their status and staleness
   source_status(product)              -- last_sync_at, overdue_since, per source
   list_clauses(product, failing?, state?, verdict?)
@@ -836,7 +836,7 @@ READS, exposed over MCP
   find_uncovered(product)             -- clause with no `asserts` link, or a
                                       --   metric with no clause
   find_drift(product)                 -- observation violates comparator + value
-  find_stalled_decisions(org)         -- decision with no resulting action
+  find_stalled_decisions()            -- decision with no resulting action
   metric_history(clause_ref, window)
   failing_cases(clause_ref, window)   -- THE PROOF TOOL. The individual cases
                                       --   that failed, each with run_url and
@@ -871,16 +871,30 @@ bindings can manufacture that precondition and then propose freely, which turns 
 formality. The agent may **propose** a binding and must then stop. Exposing `confirm_binding` over MCP
 would be a P0, not a convenience.
 
+**No tool takes an org, and the signatures above show it.** An earlier draft of this section wrote
+`list_products(org)` and `find_stalled_decisions(org)` while rule 4 below forbade exactly that, which is
+a contradiction inside one section and the implementation was right to resolve it against the rule. **An
+`org_id` argument would be a documented route across the tenant boundary**, and a boundary with a
+documented route through it is not a boundary. The org is **bound to the process at startup**, from a
+`--org` flag or an environment variable, and a test sweeps every tool's input schema for any argument
+whose name contains "org".
+
 **Rules that hold for every tool.**
 
 1. Every tool returns exactly one of B1's four shapes. A tool that returns raw rows is a defect.
 2. No tool bypasses B3. The rules there are enforced in the server, not per call site.
 3. Every write produces an `audit_event`. A tool that can write without one is B5 item 1.
-4. Every tool is tenant-scoped in the data layer. No tool takes an `org_id` from its caller.
+4. Every tool is tenant-scoped in the data layer. **No tool takes an `org_id` from its caller**, and
+   this rule outranks any signature sketched above. Proven by a sweep over every served schema.
 5. Read tools answer from the Layer's own store. Where a live fetch is needed, such as retrieving a
    trace body, that is stated in the response and its failure is a caveat rather than a silent omission.
 6. **The surface is the whole product.** Anything a human can learn from the Layer is learnable through
-   these tools, because Part C must pass over stdio with no UI and no Dust.
+   these tools, because Part C must pass over stdio with no UI and no Dust. That includes
+   `find_underspecified`, which the read tier above does not list but B1 defines and the terminal
+   already answers. **A surface narrower than the terminal's breaks A6**, so rule 6 outranks the list.
+7. **Identity, not authentication, in this phase.** A write is attributed to an actor the server cannot
+   verify, which is the same line the phase ordering draws. Sessions and bearer tokens arrive with the
+   HTTP transport.
 
 ---
 
@@ -1266,3 +1280,52 @@ because a unique constraint on a partitioned table must contain the partition ke
 idempotent only because that column is the observation's own time rather than the clock's. And the
 store is Postgres partitioned by month with a hash of `org_id` beneath, which is what AC-27 asks for in
 ordinary declarative partitioning.
+
+### D4b. Two contradictions and one real bug, found by serving the surface
+
+**B11 contradicted itself, and the implementation was right to follow the rule.** The tool list was
+written `list_products(org)` and `find_stalled_decisions(org)` while rule 4 of the same section forbade
+a tool taking an `org_id` from its caller. An argument would be a **documented route across the tenant
+boundary**, and a boundary with a documented route through it is not a boundary. The signatures are
+corrected, rule 4 now says explicitly that it outranks any sketched signature, and the org binds to the
+process at startup. A test sweeps every served schema for an argument whose name contains "org".
+
+**B11's list was also narrower than B1's finding kinds.** It named four of the five. Rule 6 already
+says the surface is the whole product, so `find_underspecified` is served, and rule 6 is now stated to
+outrank the list. A surface narrower than the terminal's breaks A6. **Rule 7 added**, recording that a
+write in this phase carries identity the server cannot verify, which is the same line the phase
+ordering draws.
+
+**And a real bug the serving caught, in code written for AC-7 three steps earlier.** The clause citation
+resolver built a spec file URL **whether or not the clause existed**, so `clause:NOPE-1` resolved to a
+live URL and a proposal citing it passed as having resolvable evidence. That is **B3 rule 7, never cite
+a record it did not read, broken by a missing null check**, and invisible because every ref the suite
+had resolved until then was real. Nothing in this document changes, but it is recorded here because it
+is the first demonstrated instance of B5 item 3 reaching production code, and the lesson is that a
+resolver must fail on an unknown ref rather than construct a plausible one.
+
+**One testing lesson worth carrying into every acceptance criterion here.** Four tests passed vacuously
+because a fixture never committed, so the server saw no data and refused every call, and **a refusal is
+one of B1's four shapes**. A sweep asserting "every tool returns one of the four shapes" was therefore
+satisfied by a server that could answer nothing. Where this document asks for a shape over a vocabulary
+that includes the failure mode, **something must also assert the success**, or the criterion proves
+nothing. AC-32 is the one to read this way.
+
+### D4c. EC-3 contradicted B2, and B2 wins
+
+EC-3's second half said "every clause stays `provisional`" after a cold start of one run. B2 defines
+`measured` as "a baseline run exists", and one run is a baseline, so the two could not both hold. The
+build resolved it in B2's favour, correctly, because `state` records **where a number came from** and a
+measurement did happen. Pretending otherwise would make `provisional` mean two different things.
+
+**The restraint EC-3 was reaching for belongs in the prose, not in the state.** A single breaching run
+produced "missed in 1 of 1 runs, worst 80%", which is shaped like a trend at the exact moment a reader
+is least able to tell it is not one. The answer now leads with the fact that there is one run and no
+history. EC-3 is amended to require that and to drop the `provisional` clause.
+
+This is the third criterion amended because building it showed the wording was wrong, after AC-25 and
+AC-26, and the pattern across all three is the same. **Each tried to express a presentational rule as a
+constraint on stored state.** AC-25 asked for a privacy guarantee and got a weak test. AC-26 asked for
+completeness and got a privacy leak. EC-3 asked for caution and got a false state. The lesson for
+anything added to Part A or Part C from here is to say what the reader must be told, and leave the
+database to Part B.
