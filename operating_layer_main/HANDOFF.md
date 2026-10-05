@@ -167,7 +167,7 @@ implementer storing the one thing the product exists to show.
 | What | Why | Volume |
 |---|---|---|
 | Per clause per run, the metric, verdict, `prompt_sha`, `corpus_sha`, `run_url` | The sequence that drift is detected across | One row per clause per run |
-| **Per failing case, the case id, outcome, redacted input, and the trace id or url** | This is the proof. Without it the Layer can say a bar was missed but not which cases missed it | Bounded by eval suite size, hundreds per run |
+| **Per failing case, the case id, outcome, redacted input, and the trace id or url**. Input text for `fail` and `error` only, never for `skipped` | This is the proof. Without it the Layer can say a bar was missed but not which cases missed it | Bounded by eval suite size, hundreds per run |
 | The clause, the binding, the link, the audit event | The record itself | Thousands |
 
 **Never store.** Production spans at volume, token-level detail, full prompt and completion text for
@@ -893,6 +893,7 @@ which is a process failure worth noting.
 | **B2's storage note and this report's stack table routed observations to ClickHouse or Timescale** | **Contradicted the arithmetic in the same documents.** Ten products come to under a million rows a year, which is ordinary partitioned Postgres. Now **Postgres behind an `ObservationStore` interface**, with the columnar engine named as open question 1. The interface is the specified part, so swapping the engine later is configuration rather than a rewrite |
 | **The data contract omitted what CI actually checks, and `comparator + value` could not hold a real target** | **Both found by building it.** `enforcement_fact` added, because AC-4 and AC-15 are unanswerable without it and H14 is undetectable without its `scope`. `value_high`, `unit` and `direction` added to `clause`, because "3% to 8%" and "under £1,200" are real spec targets and a bare `0.08` silently becomes 8 or 8%. See PRD D4 |
 | **The verdict boundary was defined as a concept with no rule** | **Now a Wilson score interval** at a pinned Z, matching the fixtures' own `shared/stats.py`. This is also why `cannot_confirm` dominating is correct rather than evasive, since eleven critical cases cannot separate 90% from 100% at any honest confidence |
+| **"Store `input_redacted` for any outcome that is not `pass`"** | **Wrong, and a privacy leak rather than a style point.** Taken literally it stores the text of every `skipped` case, which in the build was nine of fourteen cases per run for one real metric, including a bereavement and a financial-distress disclosure, for cases that metric never measured. **An outcome is a property of the metric, not of the row**, so the reasoning that covers a pass covers a skip. Narrowed to `fail` and `error`, enforced as a CHECK. Found by printing output rather than by a test, because nothing asserted the absence of data nobody had thought to forbid |
 | **"The Layer does not store traces, spans, prompts or datasets", and an observation is "one number bound to one clause"** | **Half right, and the wrong half was load-bearing.** Correct that the Layer never re-hosts telemetry, a trace viewer or a dataset. Wrong that an aggregate number is enough. Naming **which runs and which cases are the proof** is the product's main job, and "missed in 7 of 47 runs" is unsayable without per-case outcomes. Added `case_result`, the `failing_cases` tool, and the evidence spine in section 4. Written down because this line, left standing, would have stopped the implementer storing the one thing the product exists to show |
 | **"Dust handles the product half, I build the AI tracing and eval half"** | **Wrong on both counts, and the most dangerous misreading so far.** Linear and Notion hold the product half. Langfuse and Braintrust hold the AI half. Dust holds neither and is a client of both. **I build only the binding between them.** Building the eval half means building a tracing platform, which section 15 forbids outright. Written out as the three-way split in section 4 |
 
@@ -916,7 +917,17 @@ than being deleted and shifting everything below it.
    now the only Dust question that matters. It is a phase 4 question, not a phase 1 one.
 3. What are the Langfuse and Braintrust retention windows on the current tier? **History is being lost
    right now, so this is urgent.**
-4. Current import path for the MCP Python SDK. It moved during 2025, do not trust memory.
+4. ~~Current import path for the MCP Python SDK. It moved during 2025, do not trust memory.~~
+   **RESOLVED, 4 Oct 2026, by installing the library and reading it with `inspect.signature` rather
+   than recalling it.** On `mcp` 2.2.0: `FastMCP` is renamed **`MCPServer`**, it lives at
+   **`mcp.server.mcpserver`**, a tool is registered with the **`@server.tool()`** decorator, and the
+   transport is an **argument to `run()`**, `"stdio"` now and `"streamable-http"` later. Code written
+   from memory would have imported a module that no longer exists and failed on its first line.
+
+   **This also settles the phase ordering argument with evidence rather than reasoning.** The claim
+   that the Dust transport phase "adds no capability, it is one `run(transport=...)` argument" was an
+   inference when it was written. The transport really is a parameter, so moving from a terminal to
+   Dust changes one word. That is why the write half goes first.
 5. Where does retrieval actually happen in `private_operating_layer`? A grep of `chat.py` found nothing.
 6. Which production metrics source, and does it have an MCP server? C5 and C8 need one. Datadog is the
    example in the reference chain but the real source is undecided.

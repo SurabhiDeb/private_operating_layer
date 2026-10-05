@@ -464,11 +464,19 @@ enforcement_fact
 case_result  org_id, observation_id, case_id, outcome, input_redacted NULL,
              trace_url, trace_id, measured_at
              outcome ∈ pass | fail | error | skipped
-             UNIQUE (org_id, observation_id, case_id)
+             UNIQUE (org_id, observation_id, case_id, measured_at)
              the per-case layer beneath an observation. THIS IS THE PROOF
              a row for EVERY case, because the counts drive detection
-             input_redacted ONLY where outcome != pass. Null on a pass is
-             the correct state, not missing data
+             input_redacted ONLY where outcome ∈ fail | error.
+               NOT "anything that is not pass". A `skipped` case is one this
+               metric never measured, so its text has no reader and storing
+               it is retained personal data nobody asked for.
+               Enforced as CHECK (input_redacted IS NULL
+                                  OR outcome IN ('fail','error'))
+             measured_at is in the key because a unique constraint on a
+               partitioned table must contain the partition keys. It stays
+               idempotent because it is the observation's own time, never
+               the clock's
 
 proposal     as in B1
 audit_event  append-only, never updated, never deleted
@@ -512,11 +520,29 @@ constant when the Layer is sold rather than changing shape.
 the row count multiplies. That partitioning is what makes a per-tenant retention window and a
 tenant-scoped hard delete one statement each, which is AC-27 and audit item P9.
 
-**`input_redacted` only for failures.** A `case_result` row **shall** exist for every case, because the
-counts are what drift detection reads. `input_redacted` **shall** be populated only where `outcome` is
-not `pass`. Null on a passing row is the correct state and **shall not** be treated as missing data.
-Nobody asks to see the input of a case that passed, and at a typical pass rate this removes roughly 90%
-of stored text and the same proportion of retained personal data.
+**`input_redacted` only for `fail` and `error`.** A `case_result` row **shall** exist for every case,
+because the counts are what drift detection reads. `input_redacted` **shall** be populated only where
+`outcome` is `fail` or `error`, and **shall** be null on `pass` and on `skipped` alike. That is a
+narrowing of an earlier, looser wording, and the difference is not cosmetic.
+
+**Why `skipped` belongs with `pass` and not with `fail`.** An outcome is a property of the **metric**,
+not of the row, so the same case is `fail` under one metric and `skipped` under another. A `skipped`
+case is one this metric never measured, so its text has no reader. The earlier rule, "anything that is
+not `pass`", was found in implementation to store the input of **nine of fourteen cases per run** for
+one real recall metric, including a bereavement disclosure and a financial-distress disclosure, for
+cases that metric never looked at. Retaining that is a privacy failure with no offsetting benefit.
+
+**It is a CHECK, not a convention**, because it is a privacy guarantee.
+
+```sql
+CHECK (input_redacted IS NULL OR outcome IN ('fail', 'error'))
+```
+
+**The converse is deliberately not enforced.** The database does not require non-null on every failing
+row, because a source may carry no input text at all. See AC-26.
+
+Null on a `pass` or a `skipped` row **shall not** be treated as missing data. At a typical pass rate
+this removes roughly 90% of stored text and the same proportion of retained personal data.
 
 **The trace body stays at the source. The outcome and the pointer are the Layer's.** Eval platforms
 delete traces on lower tiers, often at 30 to 90 days. A finding citing a deleted trace is B5 item 8, an
@@ -919,8 +945,8 @@ trackers, which hold the clause but not the runs.
 | AC-22 | Every drift finding with `runs_missed > 0` carries a non-empty `failing_cases`, each entry resolving to a stored `case_result` with its `run_url`. Proven by test |
 | AC-23 | A case whose trace has been deleted at the source still resolves to its stored outcome, and the finding reports `trace_available: false` rather than omitting or faking it |
 | AC-24 | `failing_cases`, as defined in B11, answers "which runs are the proof" for any clause in one call, with no log reading and no live call to the eval platform |
-| AC-25 | No `case_result.input_redacted` contains unredacted PII, proven against a **purpose-built corpus containing each PII shape**, with the forbidden strings listed by hand so the assertion does not share its patterns with the code it checks. A sweep over the reference corpora is kept as a weaker regression guard and **is not sufficient on its own**, because those corpora contain no PII shape at all and the test passes whether the redactor works or not |
-| AC-26 | Every case in a run has a `case_result` row, and the database enforces the half of the rule that is a privacy guarantee, that **an input may exist only where `outcome` is not `pass`**. Where a source's per-case rows carry no input text at all, that is reported as `not_applicable` and **not** as a missing value. Proven by test |
+| AC-25 | No `case_result.input_redacted` contains unredacted PII, and redaction **labels** what it removed (`[email]`, not a run of asterisks) so a human triaging a failing case can still read the input, proven against a **purpose-built corpus containing each PII shape**, with the forbidden strings listed by hand so the assertion does not share its patterns with the code it checks. A sweep over the reference corpora is kept as a weaker regression guard and **is not sufficient on its own**, because those corpora contain no PII shape at all and the test passes whether the redactor works or not |
+| AC-26 | Every case in a run has a `case_result` row, and the database enforces the half of the rule that is a privacy guarantee, that **an input may exist only where `outcome` is `fail` or `error`**. A `skipped` case stores no input, because an outcome is a property of the metric and a case this metric never measured has no reader for its text. Where a source's per-case rows carry no input text at all, that is reported as `not_applicable` and **not** as a missing value. Proven by test, including a case that is `fail` under one metric and `skipped` under another |
 | AC-27 | The case result store is partitioned by `org_id` and month, and a tenant-scoped delete removes that tenant's rows across every partition, proven by test. This is audit item P9 |
 | AC-28 | A source that stops delivering causes every verdict resting on it to degrade to `cannot_confirm` within one `freshness_window`, rather than freezing at its last value. Proven by test with a clock advanced past the window |
 | AC-29 | Every answer and finding resting on an overdue source names that source and its age in prose, not only in a field. Proven by test |
@@ -1211,3 +1237,32 @@ half, before phase 4, the Dust transport**, against the handoff's order, and tha
 document says the acceptance rate must be known before a UI is built around proposals, phase 4 adds no
 capability beyond one transport argument, and Dust over read-only findings is precisely the read-only
 dashboard the handoff forbids. The handoff's build order now reflects this.
+
+### D4a. A privacy defect in D4's own wording, found by building it
+
+**The rule "`input_redacted` only where `outcome` is not `pass`" was wrong, and it was mine.**
+
+Taken literally it stores the text of every `skipped` case. In implementation that was **nine of
+fourteen cases per run** for one real recall metric, including a bereavement disclosure and a
+financial-distress disclosure, for cases that metric never measured. It was found by printing output
+rather than by a test, which is worth recording, because no test asserted the absence of data nobody
+had thought to forbid.
+
+**The missed concept is that an outcome is a property of the metric, not of the row.** The same case is
+`fail` under one metric and `skipped` under another. The reasoning behind the original rule, that nobody
+asks to see the input of a case that passed, applies with equal force to a case that was never measured.
+Writing "not `pass`" instead of naming the two outcomes that have a reader turned a privacy guarantee
+into a privacy leak.
+
+Amended in B2's schema, B2's narrative rule and AC-26 to
+`CHECK (input_redacted IS NULL OR outcome IN ('fail', 'error'))`. AC-25 also now requires redaction to
+**label** what it removed, since masking to asterisks leaves a triager unable to read the input at all.
+
+**The converse stays unenforced on purpose.** The database does not demand non-null on every failing
+row, because a source may carry no input text. That is AC-26's `not_applicable`, not a missing value.
+
+Two smaller corrections arrived with it. `case_result`'s unique constraint carries `measured_at`,
+because a unique constraint on a partitioned table must contain the partition keys, and it stays
+idempotent only because that column is the observation's own time rather than the clock's. And the
+store is Postgres partitioned by month with a hash of `org_id` beneath, which is what AC-27 asks for in
+ordinary declarative partitioning.
