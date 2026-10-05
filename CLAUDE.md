@@ -120,6 +120,15 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   which B6 reads as a rubber stamp and therefore a failure. Generate what the findings
   justify, decide all of them, report the number wherever it lands. A result outside the band
   is a finding to report, not to tune away (EC-5).
+- **A trace's availability is three states, and retention is config.** `trace_available`
+  cannot be a boolean: a source with no tracing is `not_applicable`, never a silent false.
+  Whether a body still exists is answered from `source.config["trace_retention"]`, a
+  duration the source's owner declares, because AC-24 forbids a live call to the eval
+  platform in the path that answers "which cases are the proof". Past that window the
+  finding says the body is gone, keeps the recorded outcome, and its citation goes to the
+  run rather than the dead link (AC-23, B3 rule 11). An unparseable window counts as
+  undeclared; reading a typo as "every trace is gone" would retire every old finding's
+  evidence at once.
 - **Metrics come in three tiers.** Read a named number where the source has one; compute
   it from a declarative definition over per-case rows where it does not; and where neither
   works, report `uncovered / no_metric` rather than reimplementing the customer's scorer.

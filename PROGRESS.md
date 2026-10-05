@@ -26,7 +26,7 @@ searching for it.
 | 7 | The onboarding state machine and CLI; onboard all three fixtures | **done**; the backfill's case rows are step 10 |
 | 8 | The five finding queries; reproduce all three C1 conditions | **done**; `failing_cases[]` and staleness are steps 10 and 11 |
 | 9 | Migration 5: `case_result`, the freshness columns, `harvest_cap` | **done** |
-| 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **in progress** |
+| 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **done** |
 | 11 | Freshness: a verdict degrades rather than freezing | not started |
 | 12 | The stdio MCP server, to PRD B11 | not started |
 | 13 | The agnosticism grep test, the AC matrix, the user-story tests | not started |
@@ -40,8 +40,8 @@ AC-1 to AC-36.
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-25, AC-26, AC-27 |
-| Criteria with tests that do **not** yet meet them | AC-22 and AC-23 are proven at the schema and the engine, and not end to end: nothing yet stores a case row or cites one in a finding. AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists |
+| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27 |
+| Criteria with tests that do **not** yet meet them | AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists. AC-23 holds with one limit stated in step 10: a deleted trace is recognised from the window the source declares, not from a fetch that found the body gone, because AC-24 forbids the live call in that path |
 | Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
 | User stories | **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up. PRD A7 holds thirteen stories, US-1 to US-13, and AC-11 wants a test per criterion of each. Step 13's job |
@@ -56,13 +56,15 @@ UI and no agent, from committed data alone, and against at least two independent
 products" — both reference products are onboarded from their own sources in
 `tests/test_findings.py`.
 
-Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10
-to AC-12 (step 13), AC-16 (phase 5), AC-22 and AC-24 (step 10), AC-28 to AC-30 (step 11),
-AC-31 and AC-32 (step 12), AC-34 to AC-36 (phase 5, with US-1's harvest).
+Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10 to
+AC-12 (step 13), AC-16 (phase 5), AC-28 to AC-30 (step 11), AC-31 and AC-32 (step 12), AC-34
+to AC-36 (phase 5, with US-1's harvest).
 
-**Tests:** 363 passing. **Migrations:** 5. **Commits:** 29 on `layer-phase-1-3`, ahead of
-`main` and all pushed. Steps 9 and 10 arrived in `455dcb5`, which is why their file tables
-below name no commit of their own.
+**Tests:** 397 passing. **Migrations:** 5. **Commits:** 35 on `layer-phase-1-3`, ahead of
+`main`; the last two are step 10's and are not pushed yet. The count said 29 until this step
+and was stale by four — it is `git rev-list --count main..HEAD` now, not recollection. Step 9
+and the first half of step 10 both arrived in `455dcb5`, which is why step 9's file table and
+part of step 10's name the same commit.
 
 ---
 
@@ -1206,12 +1208,14 @@ including that a source cannot be `overdue` against a window nobody set.
 
 ---
 
-## Step 10 — The evidence spine through the pipeline. In progress.
+## Step 10 — The evidence spine through the pipeline. Done.
 
-**What it has to achieve.** Carry a case from the run file that recorded it to the finding
+**What it had to achieve.** Carry a case from the run file that recorded it to the finding
 that cites it, redacted on the way in and resolvable on the way out.
 
-**Done so far.**
+**Files.** Commit `1306461`, except for five rows — `redact.py`, the PII corpus,
+`test_redaction.py`, `engine.py` and `test_metrics.py` — which arrived with step 9 in
+`455dcb5` and are listed here because they are this step's first half.
 
 | File | | What it holds and why |
 |---|---|---|
@@ -1219,7 +1223,18 @@ that cites it, redacted on the way in and resolvable on the way out.
 | `tests/fixtures/pii_corpus.json` | added | Not a product fixture: a corpus written to contain each shape the redactor claims, because the reference corpora contain none. Each case carries the literal strings that must not survive, written by hand so the assertion does not share its patterns with the code under test |
 | `tests/test_redaction.py` | added | 14 tests, including one that fails when a pattern is added to the module with no example beside it, and one that documents the limit rather than claiming a capability |
 | `layer/metrics/engine.py` | modified | `CaseOutcome`, and per-case outcomes from `rate`, `accuracy`, `recall` and `precision`. Tier 1, `count`, `mean` and `percentile` emit none |
-| `tests/test_metrics.py` | modified | 15 tests: 13 on the per-case layer, plus the two fixture checks — a sweep over 94 metric-run pairs in the committed history, and the single case inside the breaching run that is condition 1's proof |
+| `layer/adapters/base.py` | modified | `ObservationCandidate.cases`, and the arithmetic that decides whether they are evidence: `cases_reproduce_the_value` per candidate, `ImportReport.cases` and `cases_disagreeing` per import, and a loud line in `summary()` when a set does not add up |
+| `layer/adapters/eval/run_files.py` | modified | `Reader.cases`, the closed `CASE_FIELDS` set and `Reader.definition()`, which puts a source's case shape under every metric it computes. The cases are carried onto the candidate exactly as the engine produced them |
+| `layer/onboarding/persist.py` | modified | `write_cases` and `CaseWrite`. Rows are attached through the observation's own idempotency key rather than through the insert's `RETURNING`, and every refusal is named |
+| `layer/onboarding/run.py` | modified | The backfill's own line reports case rows stored, duplicates refused and refusals recorded. A backfill that loaded the numbers and none of the proof beneath them used to look identical to one that loaded both |
+| `layer/findings/traces.py` | added | The three trace states and per-source retention, read by both the drift query and the `case` resolver. One module because a finding saying the body is gone while its own citation hands over the dead link would break B3 rule 11 in the space of one screen |
+| `layer/findings/queries.py` | modified | `failing_cases[]`, `failing_cases_total` and `failing_cases_state` on the drift detail; `case:` refs in its evidence; the sentence that covers all three states |
+| `layer/findings/citations.py` | modified | The `case` resolver: to the trace where the source keeps one, to the run where it does not, and to the run rather than a dead link past retention |
+| `tests/test_metrics.py` | modified | 15 tests on the per-case layer, plus a sweep over 94 metric-run pairs in the committed history and the single case inside the breaching run that is condition 1's proof |
+| `tests/test_eval_adapter.py` | modified | 9 tests: the reader's case shape, the closed key set, a tier 1 metric carrying no cases, the arithmetic over both committed histories, and the trace pointers Langfuse already builds arriving through the same measurement path |
+| `tests/test_onboarding.py` | modified | 13 tests: every case of every run stored, the counts reproduced in SQL rather than in Python, the observation's own `measured_at`, a second backfill storing nothing, the input rule per source, the case that is `fail` under one metric and `skipped` under another, and the four refusals |
+| `tests/test_findings.py` | modified | 10 tests: the cases named on the finding, every case ref resolving and pinned, the three trace states end to end, and B3 rule 10 asserted over every clause of both products rather than the one the condition was written for |
+| `tests/test_refs.py` | modified | 2 tests: `case:<observation_id>/<case_id>`, including a positional case id |
 
 **AC-25's "proven by test over the fixture corpora" cannot prove anything on its own.** 876
 input fields across both reference products contain no email, phone, card, sort code,
@@ -1233,21 +1248,31 @@ regression guard it is. Also an open item below: the criterion wants amending.
 **The load-bearing property is that the cases reproduce the number they are evidence for.**
 `passed` equals the number of passing cases and `total` equals the number of counted ones,
 across every metric and every committed run — 94 metric-run pairs, asserted in a sweep
-rather than on a sampled run. If those could disagree, a finding would cite evidence that
-does not add up to its own claim, which is worse than citing none.
+rather than on a sampled run, and asserted a second time in SQL against the stored rows
+after the write. If those could disagree, a finding would cite evidence that does not add up
+to its own claim, which is worse than citing none. So a candidate whose cases disagree has
+its cases **refused**: the number is stored, the cases are not, and the measurement is named
+in the import report, in the audit event and in the backfill's own output.
 
 **`skipped` is a third thing, and it is why the invariant needs stating.** A true negative is
 in neither recall's denominator nor precision's: the run exercised the case and this metric
 does not measure it. Calling that a failure would invent a breach; dropping it would leave
 the run only partly accounted for. So it is stored and excluded from the arithmetic, and the
 same row is `fail` under one metric and `skipped` under another — an outcome is a property of
-the metric, not of the row.
+the metric, not of the row. There is a test for exactly that over the committed history, as
+AC-26 asks.
 
 **Two defaults that are deliberately asymmetric.** `id_field` defaults to `id` and
 `trace_id_field` to `trace_id`, because a wrong guess there costs a missing pointer.
 `input_field` has **no default at all**: guessing which field holds the customer's own words
 and storing it would be the one default in this codebase whose failure mode is retaining
 other people's personal data that nobody asked for.
+
+**The case shape is stated once per reader, and its key set is closed.** A run file's rows
+have one shape, so `cases: {input_field: ...}` sits on the reader and a metric may override
+it. An unknown key is refused at read time rather than ignored, because the failure mode of
+a typo here is silence: `input_fields` would leave every failing case with no input, every
+finding with nothing to show, and nothing anywhere saying why.
 
 **A privacy defect found by printing output, not by a test.** The rule was first written as
 the specification words it — an input "only where `outcome` is not `pass`" — which stored the
@@ -1259,41 +1284,111 @@ rule is now `input_redacted IS NULL OR outcome IN ('fail', 'error')`, enforced b
 well as by the engine, and it broke one of step 9's own tests when it landed, which is the
 test doing its job.
 
-**Still to do in this step.** `ObservationCandidate.cases` and the report arithmetic in
-`layer/adapters/base.py`; lifting case ids, inputs and trace pointers in
-`layer/adapters/eval/run_files.py`; mapping the pointers Langfuse already carries; writing
-and reconciling the rows in `layer/onboarding/persist.py`; a `case` ref kind and its resolver;
-and `failing_cases[]` on the drift finding. Until the last of those exists, **AC-22 and AC-24
-are not met** — the engine produces the evidence and nothing stores or cites it.
+**An arithmetic error found the same way, and worth recording because it looks right.** The
+first count written for the stored rows was `47 runs × 14 cases`, taken from a run's own
+`meta.cases`. The committed runs hold between 1 and 20 cases each and 506 in total, so the
+assertion was wrong by 60% while reading like the obvious hand-check. The tests now carry 506
+and say where it comes from.
 
-**Verification so far.**
+**`write_cases` keys through the idempotency key, not through the insert.** The observation
+upsert returns only the rows it created, which on a repeated backfill is none of them — so
+reading the ids back is the only thing that can attach cases to an observation stored before
+this step existed, and it makes the second run free: the case rows collide on the primary key
+and are refused exactly as the observations are. `measured_at` is copied from the observation
+and never read off the clock, because it is part of the primary key as the partition key, and
+the clock would write a second copy of every case on every backfill (AC-27).
+
+**Four refusals, each named rather than counted.** Cases that disagree with their aggregate;
+cases whose observation is absent; two cases in one run sharing an id, where the second cannot
+be addressed individually and overwriting the first would make `case:102/14` resolve to
+whichever row was written last; and a case id longer than the column, where truncating would
+turn two cases into one piece of evidence. Each lands in the audit event by name and in the
+step's output as a count, because a smaller number of rows is not a report.
+
+**`trace_available` is three states, not a boolean, and none of them calls the eval platform.**
+AC-24 requires the proof "with no log reading and no live call to the eval platform", so
+`available` is a claim about the pointer and the source's declared retention window. A source
+that records no trace scores `not_applicable`, never a silent false, which would read as a
+Layer that lost the pointer (B6). A pointer past its source's window is `past_retention`: the
+finding says the body is gone, keeps the recorded outcome, and its citation goes to the run
+rather than to the dead link (AC-23, B3 rule 11). Retention is declared per source as
+`source.config["trace_retention"]`, a duration — a fact about somebody else's platform and
+tier, so the Layer is told it rather than knowing it, and adding it needed no migration (R3).
+An unparseable window is treated as undeclared, because reading a typo as "every trace is
+gone" would retire the evidence behind every old finding at once.
+
+**`failing_cases_state` exists so an empty list cannot mean two things.** B3 rule 10 makes an
+empty `failing_cases` beside `runs_missed > 0` a defect — but it is also the honest answer for
+a tier 1 metric, where the source reports a number and there are no rows beneath it the Layer
+ever saw. So the three states are `cited`, `not_applicable` and `no_failing_cases`, each with
+its own sentence in the summary, and the B3 rule 10 test runs over every clause of both
+products rather than the one clause the condition was written for.
+
+**The cited cases are the ones the metric recorded as failing, which is a statement about the
+metric and not about the bar.** For a floor — accuracy at least 85% — they are the same rows.
+For a cap expressed over a per-case predicate they would not be, so the summary says "recorded
+as failing" and no sentence claims one produced the other (B3 rule 6). No clause in the three
+fixtures is a cap over a per-case metric: their `<=` bars are latency and cost, which are
+`percentile` and `read` and emit no cases at all.
+
+**AC-22, AC-23 and AC-24 are now met end to end**, with one limit stated rather than hidden:
+`past_retention` is derived from the window the source declares, not from a fetch that found
+the body gone. The live fetch belongs to the tool a human reaches for when they want to read
+the conversation itself, which is step 12's `failing_cases` and phase 4's transport. Deriving
+it here is not a shortcut — AC-24 forbids the live call in this path.
+
+**Verification.**
 
 ```
 $ .venv/bin/python -m pytest
-........................................................................ [ 99%]
-...                                                                      [100%]
-363 passed in 50.91s
+........................................................................ [ 90%]
+.....................................                                    [100%]
+397 passed in 73.85s (0:01:13)
 ```
 
-51 tests added since step 8's 312: 19 on the schema, 3 on the operator surface of a
-freshness window, 14 on redaction and 15 on the per-case layer.
+34 tests added since the first half of this step's 363. The output was also read rather than
+only asserted, for all three trace states and both reference products:
+
+```
+TRI-11.2 Escalation recall >= 99% was missed in 7 of 47 runs, worst 80% (4 of 5) in run
+20260915-133223Z-v2. The latest run, 20260915-150650Z-v2, is at 100%, so a check on the
+latest run alone shows nothing. 7 case(s) across these runs are recorded as failing. Case
+ids: 14. This source records no trace pointers, so each case cites its run. Breaching runs
+record ca6d836-dirty. Runs at 98380d1, baf3df2-dirty, f05a88a-dirty do not breach.
+
+PD-8.8 Critical C1 to C6 >= 100% was missed in 7 of 7 runs, worst 45.5% (5 of 11) in run
+20260917-071445Z-v1. [...] 14 case(s) across these runs are recorded as failing. Case ids:
+q28, q33, q36, q39, q40, q42, q41. 14 of the cited cases point at a trace the source no
+longer keeps; the recorded outcome is shown instead of a dead link.
+```
+
+Covering: a candidate carrying the cases behind its number; a reader's case shape reaching
+every metric it computes and a metric overriding it; a misspelled case key refused rather
+than ignored; a tier 1 metric carrying no cases without that counting as a disagreement; the
+cases reproducing their own `passed` and `total` over both committed histories at the adapter
+and again in SQL after the write; every case of every run stored rather than the failures
+alone; a case carrying its observation's time and not the clock's; a second backfill storing
+nothing; an input stored for a failing case and for no other, and none at all from the source
+whose rows carry no text; one case that is `fail` under one metric and `skipped` under
+another, from real data; the four refusals, each named rather than counted; the cases named
+on the drift finding with every `case:` ref resolving to a pinned URL and `unresolved` empty;
+all three trace states end to end, including the citation for a deleted trace going to the
+run rather than the dead link; and B3 rule 10 asserted over every clause of both products
+rather than the one clause the condition was written for.
 
 ---
 
 ## Next
 
-**Finish step 10**, in the order the data flows: `ObservationCandidate.cases` and the report
-arithmetic, the eval adapter lifting case ids, inputs and trace pointers, the Langfuse
-pointers it already carries, the rows written and reconciled in `persist.py`, a `case` ref
-kind and its resolver, and `failing_cases[]` on the drift finding. The last of those is what
-makes AC-22 and AC-24 true rather than partly true.
-
-**Step 11, freshness.** The columns exist and nothing reads them. `judge()` takes the
-source's window and the clock, `met` and `missed` degrade to `cannot_confirm` outside it with
-the age named, `as_of` and `stale` go on the finding, `stale_sources` on the answer, and the
-global `STALE_AFTER = timedelta(days=30)` at `layer/findings/queries.py:48` retires in favour
-of the per-source window. The governing sentence is PRD B2's: **an absent measurement is not a
-passing one**, and the governing behaviour is to degrade rather than freeze.
+**Step 11, freshness**, which is the half of the 3 October revision step 10 did not carry.
+The columns exist and nothing reads them. `judge()` takes the source's window and the clock,
+`met` and `missed` degrade to `cannot_confirm` outside it with the age named, `as_of` and
+`stale` go on the finding, `stale_sources` on the answer, and the global
+`STALE_AFTER = timedelta(days=30)` retires in favour of the per-source window.
+`layer/findings/traces.py` already reads a per-source window out of `source.config`, for
+trace retention, and is where the freshness one belongs beside it rather than a second way of
+asking the same question. The governing sentence is PRD B2's: **an absent measurement is not
+a passing one**, and the governing behaviour is to degrade rather than freeze.
 
 **Step 12, the stdio MCP server, to PRD B11.** The full read tier including `list_products`,
 `get_product`, `source_status`, `failing_cases` and `trace_chain`, and the write tier including
