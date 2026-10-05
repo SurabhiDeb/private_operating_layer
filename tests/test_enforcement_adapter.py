@@ -87,8 +87,12 @@ class TestScope:
         """
         assert only(scan(source)).scope == "latest_only"
 
+    @pytest.mark.ac("AC-37")
     def test_an_unreadable_run_selection_is_undetermined_rather_than_assumed(self):
-        """Neither of the confident states is true here. Claiming `all_runs` asserts full
+        """AC-37's last sentence: "A clause whose gate cannot be read records
+        `scope: undetermined` rather than a guess."
+
+        Neither of the confident states is true here. Claiming `all_runs` asserts full
         coverage and hides a gap; claiming `latest_only` manufactures a finding."""
         source = "MIN_TEAM_ACCURACY = 0.85\nassert report.team_accuracy >= MIN_TEAM_ACCURACY"
         fact = only(scan(source))

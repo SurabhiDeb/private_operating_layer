@@ -121,6 +121,11 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
 
         worst = _worst(bar.clause, breaching)
         latest = rows[-1]
+        #: EC-3: "no drift claims from a single point". A breach in the only run on
+        #: record is a fact and is reported, but "missed in 1 of 1 runs, worst 80%" is a
+        #: sentence shaped like a trend, and a cold start is the moment a reader is least
+        #: able to tell the difference. So the sequence length is stated in words.
+        single_point = len(rows) == 1
         first = breaching[0]
         current = violates(bar.clause, latest.value)
         cases, cases_total, cases_state = failing_cases_for(session, product, breaching)
@@ -136,7 +141,7 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
             stale=bool(staleness and staleness.stale),
             summary=_drift_summary(
                 bar, rows, breaching, worst, latest, current, cases, cases_total,
-                cases_state, staleness,
+                cases_state, staleness, single_point,
             ),
             evidence=(
                 [f"clause:{bar.clause.ref}"]
@@ -153,6 +158,7 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
                 "worst_run": worst.run_id,
                 "runs_missed": len(breaching),
                 "runs_total": len(rows),
+                "single_point": single_point,
                 "latest_run": latest.run_id,
                 "latest_verdict": bar.clause.verdict,
                 "first_breaching_run": first.run_id,
@@ -174,8 +180,25 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
 
 def _drift_summary(
     bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state,
-    staleness=None,
+    staleness=None, single_point: bool = False,
 ) -> str:
+    if single_point:
+        # A cold start. One run, no history, and the first sentence says so — before any
+        # number, because "missed in 1 of 1 runs" read on its own is indistinguishable
+        # from a pattern (EC-3).
+        head = [
+            f"{bar.clause.ref} {bar.clause.label or bar.metric} {_bar_text(bar.clause)} "
+            f"is missed by the only run on record, "
+            f"{latest.run_id or 'the most recent'}, at "
+            f"{_value_text(bar.clause, latest.value)}"
+            + (f" ({latest.passed} of {latest.total})" if latest.total else "")
+            + ". There is no history to compare it against, so this is one measurement "
+            "and not a trend."
+        ]
+        head.append(_cases_sentence(cases, cases_total, cases_state))
+        if staleness is not None and staleness.stale:
+            head.append(f"The run is not current — {staleness.describe()}.")
+        return " ".join(head)
     parts = [
         f"{bar.clause.ref} {bar.clause.label or bar.metric} {_bar_text(bar.clause)} "
         f"was missed in {len(breaching)} of {len(rows)} runs, "

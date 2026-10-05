@@ -269,7 +269,7 @@ def _name_pattern(
 ) -> re.Pattern[str]:
     """A pattern for a metric name as code spells it.
 
-    `team_accuracy` has to find `MIN_TEAM_ACCURACY`, `teamAccuracy`, `team-accuracy` and
+    `answer_accuracy` has to find `MIN_ANSWER_ACCURACY`, `answerAccuracy`, `answer-accuracy` and
     `"team accuracy"`. Words in order, separated by anything that is not a letter or a
     digit, which also keeps `accuracy_team` from matching.
 
@@ -295,7 +295,7 @@ def _threshold_for(
 ) -> tuple[float | None, str | None]:
     """The number this check compares against, read in two steps of falling confidence.
 
-    *On the same line as the metric's name.* `MIN_TEAM_ACCURACY = 0.85` names both at
+    *On the same line as the metric's name.* `MIN_ANSWER_ACCURACY = 0.85` names both at
     once, so a number here is almost certainly the bar — including when it is **not** the
     stated one, which is how "the spec moved and the gate did not" becomes visible.
 

@@ -15,28 +15,32 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phase 1 of 3 — steps 8 of 10 done. Onboarding and the findings both work.** See [`PROGRESS.md`](PROGRESS.md) for the
-plan, what is finished, and a technical summary of each step.
+**Phases 1 to 3 are done — 13 steps of 13.** The read half works end to end: a product can be
+onboarded, interrogated from a terminal or over MCP, and every answer cites records a human can
+open. See [`PROGRESS.md`](PROGRESS.md) for the plan, what each step did, and what is left.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | The MCP server |
-| All 12 tables, reversibly migrated, with an append-only audit log | The write half: proposals and approvals |
-| Refs: the `kind:id` citation scheme and its resolver registry | `trace_chain`, and the sources that fill a chain |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The write half: the generators, the critic, and a human deciding proposals |
+| All 13 tables, reversibly migrated, with an append-only audit log | The remaining sources: requirement, decision, ticket, config, production |
+| Refs: the `kind:id` citation scheme and its resolver registry | Dust, or any agent runtime. Phase 4 is one `run(transport=...)` argument |
 | A git source pinned to an immutable commit | |
 | The metric engine: reads a number, computes one, or declines to | |
 | Spec, eval and code adapters, with Langfuse as a second transport | |
 | Onboarding: all seven steps, with the binding gate | |
-| Verdicts, via a Wilson interval | |
-| **Three of the five findings, with resolvable citations** | |
+| Verdicts, via a Wilson interval, degrading when their evidence goes stale | |
+| **All five findings, with resolvable citations** | |
+| **The evidence spine: the individual cases a finding cites** | |
+| **A stdio MCP server, 20 tools, with the human-only tier absent from it** | |
 | **A CLI: `python -m layer`** | |
-| 312 tests | |
+| 558 tests | |
 
 A product can be onboarded end to end and interrogated. `find_drift`, `find_unenforced` and
-`find_uncovered` reproduce real breaches from committed data, with every citation resolving to
-a pinned commit. `find_stalled_decisions` and `find_underspecified` refuse by name until their
-sources exist, which is the designed behaviour rather than a gap. What is missing is the MCP
-server, so today the way in is the CLI.
+`find_uncovered` reproduce real breaches from committed data, naming the individual cases that
+missed each bar, with every citation resolving to a pinned commit.
+`find_stalled_decisions` and `find_underspecified` refuse by name until their sources exist,
+which is the designed behaviour rather than a gap. What is missing is the half that writes:
+nothing here proposes a change yet except through a tool a human has to call.
 
 ---
 

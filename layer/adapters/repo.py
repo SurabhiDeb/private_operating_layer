@@ -150,7 +150,7 @@ class RepoHandle:
 
 
 def _file_resolver(handle: RepoHandle) -> Resolver:
-    """`file:products/triage/gate.py#L25` -> a blob URL at the pinned revision."""
+    """`file:path/to/gate.py#L25` -> a blob URL at the pinned revision."""
 
     def resolve(ref: Ref) -> str | None:
         path, _, fragment = ref.id.partition("#")

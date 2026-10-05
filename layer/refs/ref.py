@@ -1,7 +1,7 @@
 """A ref: the Layer's single way of naming a record.
 
-Every citation anywhere in the system is a `kind:id` string — `clause:TRI-11.2`,
-`obs:102`, `file:products/triage/gate.py#L25`. PRD B1 fixes this shape for a
+Every citation anywhere in the system is a `kind:id` string — `clause:ABC-1.2`,
+`obs:102`, `file:path/to/gate.py#L25`. PRD B1 fixes this shape for a
 finding's `evidence`, and the prototype's output uses it throughout.
 
 The point of a URN rather than a URL is that a ref survives the system it came
@@ -11,7 +11,7 @@ is derived at read time by whichever resolver is registered for that kind. That
 is why adding a source system touches one resolver and nothing else.
 
 Refs are **not globally unique**. They are scoped to an org (hard case H11), so
-two tenants may both hold `clause:TRI-11.2` meaning different things. Resolution
+two tenants may both hold `clause:ABC-1.2` meaning different things. Resolution
 therefore always happens inside a tenant context.
 """
 

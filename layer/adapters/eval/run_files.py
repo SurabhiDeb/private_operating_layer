@@ -220,7 +220,7 @@ class RunFilesAdapter:
     def _reader_for(self, path: str, readers: list[Reader]) -> Reader | None:
         """The most specific matching reader.
 
-        Sidecars are matched before primaries: `*-groundedness.json` also matches
+        Sidecars are matched before primaries: `*-judged.json` also matches
         `*.json`, and the broader pattern winning would read a judge's verdict as a run.
         """
         from pathlib import PurePosixPath

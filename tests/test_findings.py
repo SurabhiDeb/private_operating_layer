@@ -467,8 +467,11 @@ class TestEnforcement:
         assert "no scanned CI file checks it" in absent.summary
 
     @pytest.mark.ac("AC-4")
+    @pytest.mark.ac("AC-37")
     def test_every_stated_bar_that_no_file_checks_is_reported(self, triage):
-        """AC-4. These are stated in the specification and absent from CI."""
+        """AC-4, and AC-37's first half: the answer comes out of `enforcement_fact`
+        rather than being inferred at query time. These are stated in the specification
+        and absent from CI."""
         session, product = triage
         result = queries.find_unenforced(session, product=product)
         reported = {f.clause_ref for f in result}

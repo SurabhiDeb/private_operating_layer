@@ -163,7 +163,7 @@ class Staleness:
     def phrase(self) -> str:
         """The same fact as a clause that fits inside somebody else's sentence.
 
-        Two forms because one of them read badly in real output: "PD-8.8 was last
+        Two forms because one of them read badly in real output: "the clause was last
         measured in run X, and this rests on a measurement taken 17d ago…" is two
         sentences wearing one. Found by printing a finding.
         """

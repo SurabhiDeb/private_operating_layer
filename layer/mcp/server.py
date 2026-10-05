@@ -201,6 +201,15 @@ def build(org_id: uuid.UUID, actor: str | None = None) -> MCPServer:
         return findings_for("stalled_decision", product)
 
     @server.tool()
+    def findings_across_products(kind: str = "drift") -> dict:
+        """Answer across every product in this tenant, with each finding attributed.
+
+        For the question asked without naming a product (US-11). `kind` is drift,
+        unenforced or uncovered.
+        """
+        return answer(lambda s: reads.findings_across_products(s, kind))
+
+    @server.tool()
     def find_underspecified(product: str) -> dict:
         """Clauses whose eval passes while production sits outside the band.
 

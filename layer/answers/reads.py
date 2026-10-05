@@ -295,7 +295,7 @@ def get_clause(session: Session, ref: str) -> Answer | Refusal:
             "as_of": latest.measured_at.isoformat() if latest else None,
             "stale": bool(staleness and staleness.stale),
             "staleness": staleness.as_dict() if staleness else None,
-            "history": [_observation_dict(o) for o in series[-12:]],
+            "history": _mark_changes([_observation_dict(o) for o in series[-12:]]),
             "links": links,
         },
     ))
@@ -324,12 +324,19 @@ def metric_history(
         )
     staleness = _staleness(session, product, series[-1])
     first, last = series[0], series[-1]
+    history = _mark_changes([_observation_dict(o) for o in series])
+    unexplained = _unexplained_steps(history)
     return _resolved(session, product, Answer(
         statement=(
             f"{metric} has {len(series)} observation(s)"
             + (f" inside {window}" if window else "")
             + f", from {first.value:g} on {first.measured_at.date()} to {last.value:g} "
             f"on {last.measured_at.date()}, against {_bar(clause)}."
+            + (
+                f" {len(unexplained)} group(s) of runs record identical inputs and "
+                f"differ in value, so versioning does not explain the movement."
+                if unexplained else ""
+            )
         ),
         citations=[f"clause:{clause_ref}"] + [f"obs:{o.id}" for o in series[-12:]],
         stale_sources=freshness.stale_sources(session, product=product),
@@ -341,7 +348,8 @@ def metric_history(
             "count": len(series),
             "as_of": last.measured_at.isoformat(),
             "stale": bool(staleness and staleness.stale),
-            "observations": [_observation_dict(o) for o in series],
+            "observations": history,
+            "unexplained_steps": unexplained,
         },
     ))
 
@@ -417,6 +425,59 @@ def failing_cases(
     ))
 
 
+# -- across every product --------------------------------------------------------
+
+
+def findings_across_products(session: Session, kind: str = "drift") -> Answer | Refusal:
+    """US-11: "When asked without naming a product, the Layer shall answer across every
+    product in the tenant", with every finding attributed to its product.
+
+    One answer rather than a merged list of findings, because a merged list loses the
+    thing US-11 is about: which product each one belongs to. The findings themselves
+    already carry `product`, and they are returned beneath the statement rather than
+    flattened into it.
+    """
+    from layer.findings import queries as q
+
+    products = session.execute(select(Product).order_by(Product.key)).scalars().all()
+    if not products:
+        return Refusal(
+            reason=(
+                "no product is onboarded in this org, so there is nothing to answer "
+                "across."
+            ),
+            missing=["a registered product"],
+        )
+    query = {
+        "drift": q.find_drift,
+        "unenforced": q.find_unenforced,
+        "uncovered": q.find_uncovered,
+    }.get(kind)
+    if query is None:
+        return Refusal(
+            reason=f"{kind!r} is not a finding kind that can be asked across products.",
+            missing=[],
+        )
+
+    per_product: dict[str, list[dict]] = {}
+    stale: list[dict] = []
+    total = 0
+    for product in products:
+        result = query(session, product=product)
+        per_product[product.key] = [f.as_dict() for f in result]
+        total += len(result)
+        stale.extend(result.stale_sources)
+    return Answer(
+        statement=(
+            f"{total} {kind} finding(s) across {len(products)} product(s): "
+            + ", ".join(f"{key} {len(v)}" for key, v in per_product.items())
+            + "."
+        ),
+        stale_sources=stale,
+        detail={"kind": kind, "by_product": per_product, "count": total},
+    )
+
+
 # -- the chain -------------------------------------------------------------------
 
 
@@ -430,7 +491,7 @@ def trace_chain(session: Session, entity: str, depth: int = MAX_CHAIN_DEPTH) -> 
     """
     if not entity or ":" not in entity:
         raise Unreadable(
-            f"{entity!r} is not a ref. A ref is `kind:id`, such as `clause:TRI-11.2`."
+            f"{entity!r} is not a ref. A ref is `kind:id`, such as `clause:ABC-1.2`."
         )
     depth = max(1, min(int(depth), MAX_CHAIN_DEPTH))
     rows = session.execute(
@@ -676,6 +737,69 @@ def _links_touching(session: Session, product: Product, ref: str) -> list[dict]:
          "source": r.created_by}
         for r in rows
     ]
+
+
+def _mark_changes(rows: list[dict]) -> list[dict]:
+    """Flag each observation where a recorded input differs from the one before it.
+
+    US-8: "The Layer shall mark points where the prompt version or corpus changed." A
+    reader comparing twelve rows by eye is the thing this avoids, and it is also what
+    makes H1 legible — a step with no change in any recorded version is the case where
+    versioning does not explain the movement, and it can only be seen once the changes
+    are marked.
+    """
+    previous: dict | None = None
+    for row in rows:
+        changed = sorted(
+            field for field in ("prompt_version", "corpus_sha", "code_rev")
+            if previous is not None and row.get(field) != previous.get(field)
+        )
+        row["changed"] = changed
+        row["inputs_unchanged"] = previous is not None and not changed
+        previous = row
+    return rows
+
+
+def _unexplained_steps(history: list[dict]) -> list[dict]:
+    """Groups of runs that record the same inputs and disagree on the number.
+
+    H1 and US-8's third criterion: "the Layer shall state that versioning does not
+    explain the movement". The sentence existed in a docstring and in nothing the Layer
+    ever said, which the story matrix found — H1 had a test that the *condition* exists
+    in the fixture history and none that the Layer reports it.
+
+    **Grouped, not compared pairwise.** The first version walked adjacent pairs and found
+    nothing, because the fixture's instance is v4, v5 and v6 sharing one prompt sha and
+    one corpus sha while scoring 92, 92 and 94 — the disagreement is across a group, and
+    two of the three runs agree. Comparing neighbours would have reported this condition
+    as absent from a history built to contain it.
+
+    States the coincidence and stops. Naming a cause is forbidden (B3 rule 6), and the
+    honest content here is precisely that the recorded inputs do not account for it.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for row in history:
+        if row["prompt_version"] is None and row["corpus_sha"] is None:
+            # Nothing recorded to hold constant, so nothing can be said about it.
+            continue
+        groups.setdefault((row["prompt_version"], row["corpus_sha"]), []).append(row)
+
+    out = []
+    for (prompt_version, corpus_sha), rows in groups.items():
+        values = {row["value"] for row in rows}
+        if len(rows) < 2 or len(values) < 2:
+            continue
+        out.append({
+            "runs": [row["run_id"] for row in rows],
+            "values": sorted(values),
+            "prompt_version": prompt_version,
+            "corpus_sha": corpus_sha,
+            "note": (
+                f"{len(rows)} runs record the same prompt version and corpus and the "
+                f"value differs across them. Versioning does not explain the movement."
+            ),
+        })
+    return out
 
 
 def _observation_dict(row: Observation) -> dict:

@@ -18,7 +18,7 @@ from layer.adapters.code.enforcement import EnforcementAdapter
 from layer.adapters.eval.run_files import RunFilesAdapter
 from layer.adapters.repo import RepoHandle
 from layer.adapters.spec.file_spec import SpecAdapter
-from layer.core import freshness
+from layer.core import freshness, injection
 from layer.db.models import Clause, Product, Source
 from layer.onboarding import persist, state
 from layer.refs.registry import Registry
@@ -76,8 +76,22 @@ def import_spec(session: Session, *, product: Product, actor: str) -> StepResult
             raise UnsupportedSource(f"no spec adapter for kind {source.kind!r}")
         handle = handle_for(source)
         path = source.config["path"]
+        document = handle.read(path)
+        # H12 and B3 rule 2. The document is imported unchanged either way; this only
+        # records that somebody's spec contains text shaped like an instruction, which
+        # is an attack on the definition of correctness and belongs in the audit log
+        # rather than in a comment nobody reads.
+        injection.record(
+            session, org_id=product.org_id, actor=actor,
+            subject=f"source:{source.id}", role="spec",
+            suspicions=injection.scan(
+                document.decode("utf-8", "replace") if isinstance(document, bytes)
+                else document,
+                locator=path,
+            ),
+        )
         report = SpecAdapter().read(
-            handle.read(path),
+            document,
             {**source.config, "ref_prefix": source.config.get("ref_prefix")
              or product.ref_prefix or product.key[:3].upper()},
         )

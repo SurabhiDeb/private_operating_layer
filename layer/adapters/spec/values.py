@@ -173,7 +173,7 @@ def _looks_like_band(lowered: str, match: re.Match) -> bool:
 def normalise_metric_name(label: str) -> str:
     """A stable, comparable metric name from a human label.
 
-    `Overall team accuracy` and `team_accuracy` have to meet somewhere, since one is in
+    `Overall answer accuracy` and `answer_accuracy` have to meet somewhere, since one is in
     the spec and the other is in the run file. Lowercase, non-alphanumerics to
     underscores, and a few leading adjectives dropped.
     """

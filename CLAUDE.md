@@ -5,9 +5,11 @@ product promised (clauses, imported from that product's own spec), binds it to e
 of what the product actually does (observations, backfilled from that product's own eval
 sources), surfaces findings where the two disagree, and proposes changes a human decides.
 
-**`README.md` is not about this.** It documents EarlyEcho, a single-tenant Slack/Gmail
-business-memory product that shares this repository. The two are unrelated. Anything
-outside `layer/` and `tests/` is EarlyEcho's unless this file says otherwise.
+**`README.md` is this project's**, since `de21e88`. It was EarlyEcho's — a single-tenant
+Slack/Gmail business-memory product that shares this repository — and that is why older
+notes say to ignore it. EarlyEcho still owns `api/`, `ingestion/` and `requirements.txt`;
+anything outside `layer/`, `tests/`, `operating_layer_main/`, `README.md` and `PROGRESS.md`
+is EarlyEcho's unless this file says otherwise.
 
 ## Where the specification lives
 
@@ -30,7 +32,9 @@ They are stable across versions and they are how the tests are named.
 .venv/bin/alembic upgrade head          # build the schema
 .venv/bin/python -m pytest              # the whole suite
 .venv/bin/python -m pytest -m ac        # only acceptance-criterion tests
+.venv/bin/python -m pytest tests/test_matrix.py -s   # the AC / H / US / EC matrix
 .venv/bin/python -m layer --help        # the onboarding CLI (step 7 onward)
+.venv/bin/python -m layer serve --org <id> --as <email>   # the stdio MCP server
 ```
 
 `.venv` is this repo's, Python 3.13.5. `requirements-layer.txt` is the Layer's;
@@ -39,7 +43,8 @@ They are stable across versions and they are how the tests are named.
 ## Hard constraints
 
 Breaking one is a defect, not a trade-off. The first five are from PRD B3 and B5, where
-a violation of the first three is a release blocker.
+a violation of the first three is a release blocker. Rules 9 to 12 arrived with the
+3 October revision and are B3 rules 10 to 12 plus B11's `confirm_binding` rule.
 
 1. **Never write without an approval record.** Agents and the critic may only create
    proposals. `accept_proposal` and `reject_proposal` are never MCP tools, in any phase.
@@ -60,6 +65,21 @@ a violation of the first three is a release blocker.
 8. **Nothing is proposed for a product that is not `live`** with at least one confirmed
    binding (B3 rule 8, AC-17). A fresh install with no product proposes nothing and says
    so (AC-20).
+9. **Never assert a bar was missed without citing the cases that missed it.** A drift
+   finding whose `failing_cases` is empty while `runs_missed > 0` is a defect, not a terse
+   answer (B3 rule 10). Where a source records no per-case rows at all, say which of the
+   two it is — `failing_cases_state` exists so an empty list cannot mean both.
+10. **Never present a deleted trace as available.** Past the source's declared retention
+    the Layer states the body is gone, keeps the recorded outcome, and points the citation
+    at the run rather than the dead link (B3 rule 11, AC-23).
+11. **Never present a stale measurement as current, and never let an absent measurement
+    read as a passing one.** Outside a source's `freshness_window` a verdict degrades to
+    `cannot_confirm` and the staleness is stated in words (B3 rule 12, AC-28 to AC-30). A
+    clause holding `met` because its source stopped reporting is the worst output this
+    system can produce, because it is indistinguishable from good news.
+12. **`confirm_binding` is human-only, like `accept_proposal`.** It is absent from the MCP
+    server in any phase, not merely undecorated. An agent able to confirm its own binding
+    manufactures rule 8's precondition and can then propose freely (B11, AC-31).
 
 ## The agnosticism contract
 
@@ -77,7 +97,8 @@ definition. It may never contain `if product.key == ...`. The prototype's
 **R3. Open vocabularies are data, not Postgres enums.** `pattern`, `source.kind`,
 `clause.kind` and `link_type` are validated in Python against a registry. Adding a source
 system or a clause kind must not need a migration. Closed sets the Layer branches on —
-`product.status`, `source.role`, `state`, `verdict`, `source_kind` — get a CHECK.
+`product.status`, `source.status`, `source.role`, `state`, `verdict`, `source_kind`,
+`case_result.outcome` and `enforcement_fact.scope` — get a CHECK.
 
 **Fixtures.** `tests/fixtures/` is the only place a real product name may appear. A
 fixture name in a migration, a seed script, a default config or a pattern definition is a
