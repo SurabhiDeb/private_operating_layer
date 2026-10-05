@@ -27,7 +27,7 @@ searching for it.
 | 8 | The five finding queries; reproduce all three C1 conditions | **done**; `failing_cases[]` and staleness are steps 10 and 11 |
 | 9 | Migration 5: `case_result`, the freshness columns, `harvest_cap` | **done** |
 | 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **done** |
-| 11 | Freshness: a verdict degrades rather than freezing | not started |
+| 11 | Freshness: a verdict degrades rather than freezing | **done** |
 | 12 | The stdio MCP server, to PRD B11 | not started |
 | 13 | The agnosticism grep test, the AC matrix, the user-story tests | not started |
 
@@ -35,13 +35,14 @@ searching for it.
 server and one of its tools is `failing_cases`, which cannot be built over data the store
 does not hold. Writing the server before the evidence spine means writing that tool twice.
 
-**Coverage, taken from the test markers rather than from prose.** PRD C3 is 36 criteria,
-AC-1 to AC-36.
+**Coverage, taken from the test markers rather than from prose.** PRD C3 is **39**
+criteria, AC-1 to AC-39. This file said 36 until step 11 counted them: AC-37 to AC-39
+arrived with the 3 October revision and are recorded in its own Part D3.
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27 |
-| Criteria with tests that do **not** yet meet them | AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists. AC-23 holds with one limit stated in step 10: a deleted trace is recognised from the window the source declares, not from a fetch that found the body gone, because AC-24 forbids the live call in that path |
+| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27, AC-28, AC-29, AC-30 |
+| Criteria with tests that do **not** yet meet them | AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists. AC-37 and AC-38 have behaviour and tests that no marker connects to them, and AC-39 has no direct test at all — see "What is left" below. AC-23 holds with one limit stated in step 10: a deleted trace is recognised from the window the source declares, not from a fetch that found the body gone, because AC-24 forbids the live call in that path |
 | Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
 | User stories | **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up. PRD A7 holds thirteen stories, US-1 to US-13, and AC-11 wants a test per criterion of each. Step 13's job |
@@ -56,15 +57,64 @@ UI and no agent, from committed data alone, and against at least two independent
 products" — both reference products are onboarded from their own sources in
 `tests/test_findings.py`.
 
-Still outstanding: AC-6 (needs phase 6's requirement, decision and config sources), AC-10 to
-AC-12 (step 13), AC-16 (phase 5), AC-28 to AC-30 (step 11), AC-31 and AC-32 (step 12), AC-34
-to AC-36 (phase 5, with US-1's harvest).
+What is still outstanding, and where each piece lands, is the table in "What is left, at
+a glance" below. It is kept in one place so the answer does not have to be assembled from
+this file's prose.
 
-**Tests:** 397 passing. **Migrations:** 5. **Commits:** 35 on `layer-phase-1-3`, ahead of
-`main`; the last two are step 10's and are not pushed yet. The count said 29 until this step
-and was stale by four — it is `git rev-list --count main..HEAD` now, not recollection. Step 9
-and the first half of step 10 both arrived in `455dcb5`, which is why step 9's file table and
-part of step 10's name the same commit.
+**Tests:** 423 passing. **Migrations:** 5. **Commits:** 37 on `layer-phase-1-3`, ahead of
+`main`; the last three are steps 10 and 11 and are not pushed yet. The count is
+`git rev-list --count main..HEAD`, not recollection — it said 29 until step 10 and was stale
+by four. Step 9 and the first half of step 10 both arrived in `455dcb5`, which is why step
+9's file table and part of step 10's name the same commit.
+
+---
+
+## What is left, at a glance
+
+Kept here so the answer to "what is outstanding" is one table rather than a reading of the
+whole file. Every row names where the work lands, so nothing in it is a surprise later. The
+criteria are PRD C3's, which holds **39** of them, AC-1 to AC-39.
+
+| Criterion | What it needs | Lands in |
+|---|---|---|
+| AC-6 | A requirement, decision and config source to trace a chain through. Nothing to build until they exist | phase 6 |
+| AC-10 | A test per hard case, H1 to H16 | step 13 |
+| AC-11 | A test per criterion of each user story. **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up, so this cannot be answered by running the suite today | step 13 |
+| AC-12 | The AC matrix itself: every criterion mapped to the test that proves it, and the ones belonging to later phases stated as such rather than reported as failures | step 13 |
+| AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. Needs the write half and the critic | phase 5 |
+| AC-31 | The served tool list, with the human-only tier absent from the module rather than merely undecorated | step 12 |
+| AC-32 | Every Part C criterion passing over stdio with no Dust at all | step 12 |
+| AC-33 | Something that **reads** `harvest_cap`. Stored since step 9 and read by nothing until the write half exists | phase 5 |
+| AC-34 | `proposal.rank` and the signals behind it, so a human can disagree with the ordering | phase 5 |
+| AC-35 | A harvested case surviving into an eval suite with its provenance | phase 5 |
+| AC-36 | `harvested_case_yield` computed over a full eval cycle, as a real number rather than null | phase 5 |
+| AC-37 | A marker and a named test. `enforcement_fact` records what CI checks and `scope: undetermined` works — `tests/test_enforcement_adapter.py` covers it — but nothing connects either to this criterion | step 13 |
+| AC-38 | A marker and a named test. The band, duration and currency round-trip is covered in `tests/test_spec_adapter.py` and `tests/test_schema_guarantees.py`, and again nothing connects it | step 13 |
+| AC-39 | **A test that does not exist.** The Wilson interval at the pinned Z is exercised only through onboarding verdicts; `layer/verdicts/stats.py` is tested nowhere on its own, and "a clause with few cases returns `cannot_confirm` rather than `met` on a favourable point estimate" is asserted by no test directly | step 13 |
+
+Everything else in C3 is met and marked: AC-1 to AC-5, AC-7 to AC-9, AC-13 to AC-15, AC-17
+to AC-30. Counted by grepping the specification and the test markers together rather than
+from recollection, which is how the 36-versus-39 discrepancy above came to light.
+
+**Four open items, none of them blocking.** Each is written up in full under "Open items
+created during the build" below; these are the one-line versions.
+
+1. **The Langfuse transport has never met a live instance.** Fake-tested against a surface
+   that was read rather than recalled, so pagination at scale, rate limits and timestamp
+   types are unverified. Credentials are in the fixture repository's `.env`; roughly half an
+   hour closes it, and it should happen before that path carries a history anyone depends on.
+2. **The LLM pass over spec prose is designed for and not built.** A bar stated in a way no
+   deterministic pattern reaches yields no clause, silently. The interface is shaped so the
+   pass can sit above the deterministic one without moving anything.
+3. **AC-25 and AC-26 want the criterion amended, not the code bent.** AC-26 asks for an
+   input on every failing row, which a source carrying no text cannot give; AC-25 asks for
+   proof over corpora that contain no PII to find. Steps 9 and 10 record what the code does
+   instead, and neither criterion has been changed to match.
+4. **`layer/db/partitions.py` declares six months and nothing extends them.** Anything
+   outside lands in the `DEFAULT` partition, which is correct rather than broken, but
+   declaring a new month is DDL by the table owner and there is no maintenance command for
+   it. It becomes real the first time a scheduled pull runs unattended, which is the same
+   phase as audit item P11's alerting.
 
 ---
 
@@ -1378,17 +1428,143 @@ rather than the one clause the condition was written for.
 
 ---
 
-## Next
+## Step 11 — Freshness: a verdict degrades rather than freezing. Done.
 
-**Step 11, freshness**, which is the half of the 3 October revision step 10 did not carry.
-The columns exist and nothing reads them. `judge()` takes the source's window and the clock,
-`met` and `missed` degrade to `cannot_confirm` outside it with the age named, `as_of` and
-`stale` go on the finding, `stale_sources` on the answer, and the global
-`STALE_AFTER = timedelta(days=30)` retires in favour of the per-source window.
-`layer/findings/traces.py` already reads a per-source window out of `source.config`, for
-trace retention, and is where the freshness one belongs beside it rather than a second way of
-asking the same question. The governing sentence is PRD B2's: **an absent measurement is not
-a passing one**, and the governing behaviour is to degrade rather than freeze.
+**What it had to achieve.** Stop an absent measurement from reading as a passing one. The
+columns arrived in step 9 and nothing read them, so a clause could sit at `met` forever
+because the thing that would have changed it stopped running.
+
+**Files.** Commit `c96191c`.
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/core/freshness.py` | added | The rule, and the two ages it keeps apart. `SourceWindow` answers "has the pipe stopped", `Staleness` answers "how old is the number this rests on", and both render themselves in words |
+| `layer/core/durations.py` | modified | `approximate_duration`, for an age. `format_duration` stays exact and is now only for a window — see the defect below |
+| `layer/verdicts/rules.py` | modified | `judge` takes a `Staleness`; `Judgement` gains `as_of`, `stale` and `degraded_from`; `Measurement` carries `measured_at` and `source_id` |
+| `layer/onboarding/state.py` | modified | `measure` resolves each clause's source window, applies the rule, names every degraded clause in the audit event, and refreshes source status on its way out. `Status` carries `stale_sources` and prints them |
+| `layer/onboarding/run.py` | modified | Every import stamps `last_sync_at` on the source it read, so a dead pull is distinguishable from a quiet one |
+| `layer/findings/shapes.py` | modified | `Finding.as_of` and `Finding.stale`; `FindingSet.stale_sources`, on every set including a refusal |
+| `layer/findings/queries.py` | modified | The global `STALE_AFTER` retires in favour of the source's own window; drift and `uncovered` carry `as_of`, `stale` and the staleness in prose |
+| `layer/cli.py` | modified | `findings` prints the stale sources before the findings they qualify and marks a stale finding; `measure` says why it just produced a wall of `cannot_confirm` |
+| `tests/test_freshness.py` | added | 26 tests: the rule with no database, a source's own age, and the dead-pull condition end to end over a reference product |
+
+**Two different ages are measured, and conflating them is the easy mistake.** A
+*measurement's* age is `now - observation.measured_at` and it decides a verdict. A
+*source's* age is `now - source.last_sync_at` and it decides `source.status`. They are
+usually close and they are not the same: a source that synced ten minutes ago and found
+nothing new leaves a fresh source and a stale measurement, and both are reported. The
+distinction is in the module docstring because **the first version of these tests got it
+wrong**: they advanced a clock inside `measure` and then asserted that the source was
+overdue, which produced a state the world cannot reach — a row saying it synced seconds
+ago while the answer claimed it was weeks late. The tests now make each age stale the way
+it really goes stale, by backdating `last_sync_at` for the pipe and by advancing the clock
+for the measurement.
+
+**A window nobody set degrades nothing.** `freshness_window` is null until a human states
+a cadence, and PRD B2 is explicit that staleness is then reported without a verdict being
+degraded by a window nobody set. This is why the global `STALE_AFTER = timedelta(days=30)`
+is gone rather than kept as a default: a quarterly review source is not overdue at 31 days
+and a nightly eval is overdue long before that, so one threshold cannot be right for both,
+and a Layer that picked one would have invented a cadence for somebody else's eval suite.
+
+**The rule is applied after the verdict, not instead of it.** `judge` computes the verdict
+from the interval as before and then ages it, which is what lets `degraded_from` say what
+the stored number would otherwise have read. Without that, a degraded clause is
+indistinguishable from one that was never confident, and the operator has no way to find
+what moved. A verdict already reading `cannot_confirm` keeps it and gains the age: it was
+claiming nothing, so there is nothing to degrade and a `degraded_from` there would invent a
+verdict the Layer never held.
+
+**`stale_sources` is derived, never read off `status`.** The column is a cache that
+something has to refresh, and an answer that trusted it would report "nothing is stale" for
+exactly as long as nobody ran the refresh — the same silence this step exists to break. The
+column is still written, because the operator surfaces and B11's `source_status` read a
+source rather than a finding, and the CHECK from step 9 requires `overdue_since` beside it.
+
+**`refresh` never runs from a read path.** It is called by the measure pass, which is where
+the Layer reassesses what it knows, and by the operator's own command. A query that wrote
+would make `layer findings` a mutation, and two of them racing would each think it was the
+one that noticed.
+
+**A source that has never reported is judged from when it was bound.** Treating "never" as
+"just now" would make a dead pipe look healthy for one whole window, and a source bound an
+hour ago with a 30 day window is correctly not overdue. `overdue_since` is the moment it
+became overdue — `last_sync_at + window` — and not the moment the Layer noticed, because
+when the Layer looked is not information about the source.
+
+**Two defects found by printing output, neither caught by a test.** An age of 17 days and 6
+hours came out of `format_duration` as **`1491958s`**, which is accurate and tells a reader
+nothing; ages now round down to a single unit while a window stays exact, because a window
+is policy a human typed and will check against what they set. And a stale drift summary
+read "The latest run, X, is at 90.9% and still misses the bar" one sentence before "this
+measurement is not current" — asserting and withdrawing the same thing in one paragraph.
+The stale wording now states the record ("the newest run on record … below the bar") and
+leaves the present tense alone. Both have tests now; neither had one before the output was
+read.
+
+**The end-to-end tests use the policy product, and that was probed rather than assumed.**
+A degradation can only be shown where there is a verdict to degrade. Triage has none: its
+committed runs hold between 1 and 20 cases, so every Wilson interval is too wide to clear
+or fall below a bar and all its measured clauses read `cannot_confirm` while perfectly
+fresh. The first version of this file asserted `met` on triage and failed for that reason.
+The policy product's critical subset is 11 cases against a 100% bar and reads `missed`,
+which is a verdict with something to lose.
+
+**A discrepancy found while counting criteria, and it is not step 11's to fix.** This file
+said "PRD C3 is 36 criteria, AC-1 to AC-36". The specification holds **39**: AC-37, AC-38
+and AC-39 arrived with the 3 October revision and are recorded in its own Part D3. Counted
+rather than recalled, by grepping the spec and the test markers together. Corrected above,
+and the three are now in the outstanding table — AC-37 and AC-38 have behaviour and tests
+that nothing connects to them, while **AC-39 has no direct test at all**: the Wilson
+interval is exercised only through onboarding verdicts, and `layer/verdicts/stats.py` is
+not tested on its own anywhere. That is step 13's work and it is listed there.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+........................................................................ [ 85%]
+...............................................................          [100%]
+423 passed in 76.49s (0:01:16)
+```
+
+The output was read as well as asserted, for the same product with its pull alive and then
+dead 30 days:
+
+```
+THE PULL IS ALIVE
+  verdicts      missed 1, not_applicable 37, not_measured 12
+
+THE PULL DIED 30 DAYS AGO, WINDOW 1d
+  verdicts      cannot_confirm 1, not_applicable 37, not_measured 12
+  OVERDUE       the eval source (repo) last synced 30d ago, 29d past its 1d window
+  [PD-8.8] stale=True
+    PD-8.8 Critical C1 to C6 >= 100% was missed in 7 of 7 runs, worst 45.5% (5 of 11)
+    in run 20260917-071445Z-v1. The newest run on record, 20260918-080101Z-v6, is at
+    90.9%, below the bar. [...] The newest run here is not current — this rests on a
+    measurement from the eval source (repo) taken 17d ago, outside its 1d window, so
+    it is shown with its age rather than as current.
+  [PD-8.8] uncovered/not_measured_recently
+    PD-8.8 was last measured in run 20260918-080101Z-v6, and that run is 17d old
+    against a 1d window on the eval source (repo). A number that stopped being taken
+    is not evidence that nothing changed.
+```
+
+Covering: a `met` and a `missed` each degrading to `cannot_confirm` outside the window, and
+`cannot_confirm` keeping its verdict and gaining the age; `degraded_from` recording what
+the number would have read; a window nobody set degrading nothing even at 4000 days; the
+clock alone moving a verdict between two passes with nothing else changed; a source inside,
+past and without a window; a source that never reported judged from when it was bound, and
+one bound an hour ago not overdue for it; `overdue_since` being when it happened rather
+than when it was noticed; an age rounded while a window stays exact; a stale drift summary
+stating the record and a fresh one keeping the present tense; every finding on a stale
+source naming that source and its age in prose; a fresh product carrying no staleness
+anywhere; the overdue row carrying `status` and `overdue_since` together; and a backfill
+stamping the source it read even when it stored nothing.
+
+---
+
+## Next
 
 **Step 12, the stdio MCP server, to PRD B11.** The full read tier including `list_products`,
 `get_product`, `source_status`, `failing_cases` and `trace_chain`, and the write tier including
