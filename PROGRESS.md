@@ -62,7 +62,7 @@ a glance" below. It is kept in one place so the answer does not have to be assem
 this file's prose.
 
 **Tests:** 423 passing. **Migrations:** 5. **Commits:** 37 on `layer-phase-1-3`, ahead of
-`main`; the last three are steps 10 and 11 and are not pushed yet. The count is
+`main` and all pushed, through steps 10 and 11. The count is
 `git rev-list --count main..HEAD`, not recollection — it said 29 until step 10 and was stale
 by four. Step 9 and the first half of step 10 both arrived in `455dcb5`, which is why step
 9's file table and part of step 10's name the same commit.
