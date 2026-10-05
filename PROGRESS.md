@@ -5,7 +5,7 @@ Conventions and constraints: `CLAUDE.md`. What the product is: `README.md`.
 
 **Scope.** Phases 1–3 of the handoff's build order: onboarding, the five finding queries,
 and the stdio MCP server. That is the whole read half, usable from a terminal with no UI,
-no agent and no Dust. What follows phase 3 is **not** the handoff's order any more — see
+no agent and no Dust. **All thirteen steps are done.** What follows phase 3 is **not** the handoff's order any more — see
 "Beyond phase 3" at the end of this file.
 
 **How to read the status column.** A step is `done` only when its tests pass and the
@@ -29,7 +29,7 @@ searching for it.
 | 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **done** |
 | 11 | Freshness: a verdict degrades rather than freezing | **done** |
 | 12 | The stdio MCP server, to PRD B11 | **done** |
-| 13 | The agnosticism grep test, the AC matrix, the user-story tests | not started |
+| 13 | The agnosticism grep test, the AC matrix, the user-story tests | **done** |
 
 **Why the MCP server is step 12 and not step 9.** PRD B11 is the specification for that
 server and one of its tools is `failing_cases`, which cannot be built over data the store
@@ -41,16 +41,17 @@ arrived with the 3 October revision and are recorded in its own Part D3.
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27, AC-28, AC-29, AC-30, AC-31, AC-32 |
+| Acceptance criteria met | All but five. AC-1 to AC-15, AC-17 to AC-33, AC-37, AC-38, AC-39. AC-6 is met for the walk and waits on phase 6's sources; AC-16 and AC-34 to AC-36 are phase 5. Counted by `tests/test_matrix.py`, not by hand |
 | Criteria with tests that do **not** yet meet them | AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists. AC-37 and AC-38 have behaviour and tests that no marker connects to them, and AC-39 has no direct test at all — see "What is left" below. AC-23 holds with one limit stated in step 10: a deleted trace is recognised from the window the source declares, not from a fetch that found the body gone, because AC-24 forbids the live call in that path |
-| Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
-| Edge cases | EC-2, EC-4, EC-6, EC-9 |
-| User stories | **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up. PRD A7 holds thirteen stories, US-1 to US-13, and AC-11 wants a test per criterion of each. Step 13's job |
+| Hard cases | All sixteen, H1 to H16. H2, H7 and H10 are partly covered with the half stated |
+| Edge cases | EC-1 to EC-4, EC-6 to EC-9, EC-11. EC-5, EC-10 and EC-12 are phase 5 |
+| User stories | Nine of thirteen, as 38 tests — one per criterion. US-1, US-2, US-10 and US-12 are the write half and are declared with their phase. The `story` marker went unused for twelve steps, which is why AC-11 could not be answered by running anything until step 13 |
 
 A marker is a weaker claim than it looks, in both directions. It says a criterion has a
 test, not that the criterion is met — hence the second row. And an absent marker does not
-mean absent behaviour: much of what the stories ask for works, but nothing connects a
-story's criterion to the test covering it, so AC-11 cannot be answered by running the suite.
+mean absent behaviour, which is what step 13 found: AC-37, AC-38 and AC-39 had behaviour and
+passing tests that no marker connected to them, while AC-39's own arithmetic had no test at
+all. `tests/test_matrix.py` now closes that gap in both directions and fails on either.
 
 **AC-3, AC-4 and AC-5 are the demo, and they pass.** PRD C2 requires them to do so "with no
 UI and no agent, from committed data alone, and against at least two independently onboarded
@@ -61,8 +62,8 @@ What is still outstanding, and where each piece lands, is the table in "What is 
 a glance" below. It is kept in one place so the answer does not have to be assembled from
 this file's prose.
 
-**Tests:** 457 passing. **Migrations:** 5. **Commits:** 40 on `layer-phase-1-3`, ahead of
-`main`, with the last three unpushed: step 12, its record, and a correction to this line. The count is
+**Tests:** 558 passing. **Migrations:** 5. **Commits:** 42 on `layer-phase-1-3`, ahead of
+`main`, with step 13 and its record unpushed. The count is
 `git rev-list --count main..HEAD`, not recollection — it said 29 until step 10 and was stale
 by four. Step 9 and the first half of step 10 both arrived in `455dcb5`, which is why step
 9's file table and part of step 10's name the same commit.
@@ -77,24 +78,31 @@ criteria are PRD C3's, which holds **39** of them, AC-1 to AC-39.
 
 | Criterion | What it needs | Lands in |
 |---|---|---|
-| AC-6 | **The walk is done and proven** over a six-link chain in step 12; what is left is a source that produces requirements, decisions and tickets, so a real product's chain is complete rather than hand-written | phase 6 |
-| AC-10 | A test per hard case, H1 to H16 | step 13 |
-| AC-11 | A test per criterion of each user story. **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up, so this cannot be answered by running the suite today | step 13 |
-| AC-12 | The AC matrix itself: every criterion mapped to the test that proves it, and the ones belonging to later phases stated as such rather than reported as failures | step 13 |
-| AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. Needs the write half and the critic | phase 5 |
-| ~~AC-31~~ | Met in step 12. Asserted against the served tool list **and** by grepping the module for the human-only definitions | done |
-| ~~AC-32~~ | Met in step 12: every tool returns one of B1's four shapes, no tool takes an `org_id`, and one test drives `layer serve` over a real pipe | done |
-| AC-33 | Something that **reads** `harvest_cap`. Stored since step 9 and read by nothing until the write half exists | phase 5 |
+| AC-6 | **The walk is done and tested** over a six-link chain in step 12; what is left is a source that produces requirements, decisions and tickets, so a real product's chain is complete rather than hand-written | phase 6 |
+| AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. Needs the write half, the critic, and a person's time | phase 5 |
+| AC-33 | Something that **reads** `harvest_cap`. Stored since step 9, marked by a schema test, and read by nothing until the write half exists | phase 5 |
 | AC-34 | `proposal.rank` and the signals behind it, so a human can disagree with the ordering | phase 5 |
 | AC-35 | A harvested case surviving into an eval suite with its provenance | phase 5 |
 | AC-36 | `harvested_case_yield` computed over a full eval cycle, as a real number rather than null | phase 5 |
-| AC-37 | A marker and a named test. `enforcement_fact` records what CI checks and `scope: undetermined` works — `tests/test_enforcement_adapter.py` covers it — but nothing connects either to this criterion | step 13 |
-| AC-38 | A marker and a named test. The band, duration and currency round-trip is covered in `tests/test_spec_adapter.py` and `tests/test_schema_guarantees.py`, and again nothing connects it | step 13 |
-| AC-39 | **A test that does not exist.** The Wilson interval at the pinned Z is exercised only through onboarding verdicts; `layer/verdicts/stats.py` is tested nowhere on its own, and "a clause with few cases returns `cannot_confirm` rather than `met` on a favourable point estimate" is asserted by no test directly | step 13 |
 
-Everything else in C3 is met and marked: AC-1 to AC-5, AC-7 to AC-9, AC-13 to AC-15, AC-17
-to AC-32. Counted by grepping the specification and the test markers together rather than
-from recollection, which is how the 36-versus-39 discrepancy above came to light.
+**Everything else in C3 is met**: AC-1 to AC-5, AC-7 to AC-15, AC-17 to AC-32, AC-37, AC-38
+and AC-39. AC-10 to AC-12 closed in step 13 together with AC-37, AC-38 and AC-39; AC-31 and
+AC-32 in step 12. Counted by `tests/test_matrix.py` against the specification rather than by
+hand, which is how the 36-versus-39 discrepancy and three missing markers came to light.
+
+**The other three vocabularies**, same source of truth:
+
+| | Covered | Deferred, with a phase and a reason |
+|---|---|---|
+| Hard cases, H1 to H16 | All sixteen | H2, H7 and H10 are partly covered and say which half |
+| Edge cases, EC-1 to EC-12 | Nine | EC-5, EC-10, EC-12 — phase 5 |
+| User stories, US-1 to US-13 | Nine, as 38 per-criterion tests | US-1, US-2, US-10, US-12 — the write half |
+
+**Three criteria want amending rather than implementing**, and none has been changed to make
+the code look better. AC-25 asks for proof over corpora that contain no PII to find; AC-26
+asks for an input on every failing row, which a source carrying no text cannot give; EC-3's
+"every clause stays `provisional`" contradicts B2's own definition of `measured`. Steps 9,
+10 and 13 record what the code does instead.
 
 **Four open items, none of them blocking.** Each is written up in full under "Open items
 created during the build" below; these are the one-line versions.
@@ -106,10 +114,12 @@ created during the build" below; these are the one-line versions.
 2. **The LLM pass over spec prose is designed for and not built.** A bar stated in a way no
    deterministic pattern reaches yields no clause, silently. The interface is shaped so the
    pass can sit above the deterministic one without moving anything.
-3. **AC-25 and AC-26 want the criterion amended, not the code bent.** AC-26 asks for an
-   input on every failing row, which a source carrying no text cannot give; AC-25 asks for
-   proof over corpora that contain no PII to find. Steps 9 and 10 record what the code does
-   instead, and neither criterion has been changed to match.
+3. **AC-25, AC-26 and EC-3 want the criterion amended, not the code bent.** AC-26 asks for
+   an input on every failing row, which a source carrying no text cannot give; AC-25 asks
+   for proof over corpora that contain no PII to find; EC-3's "every clause stays
+   `provisional`" contradicts B2's own definition of `measured` as "a baseline run exists".
+   Steps 9, 10 and 13 record what the code does instead, and none of the three has been
+   changed to match.
 4. **`layer/db/partitions.py` declares six months and nothing extends them.** Anything
    outside lands in the `DEFAULT` partition, which is correct rather than broken, but
    declaring a new month is DDL by the table owner and there is no maintenance command for
@@ -1694,13 +1704,160 @@ a passing case; and the server answering over a real stdio pipe.
 
 ---
 
+## Step 13 — The agnosticism grep, the acceptance matrix, the story tests. Done.
+
+**What it had to achieve.** Make the claim "this is finished" checkable by running
+something, rather than by reading this file and believing it.
+
+**Files.** Commit `d15e89a`.
+
+| File | | What it holds and why |
+|---|---|---|
+| `tests/test_agnosticism.py` | added | 25 tests enforcing R1, R2 and R3, plus the two guards that stop the file passing by having nothing to look at |
+| `tests/test_matrix.py` | added | The matrix. Reads the refs out of the specification, collects the markers out of the suite, and fails naming whatever has neither a test nor a declared deferral |
+| `tests/test_stories.py` | added | 38 tests, one per user-story criterion, for the nine stories whose behaviour exists in phases 1 to 3 |
+| `tests/test_hard_cases.py` | added | 9 tests: H2, H4, H7, H9, H10, H12, H13 — the seven that had no test |
+| `tests/test_edge_cases.py` | added | 5 tests: EC-1, EC-3, EC-7, EC-8, EC-11 |
+| `tests/test_verdicts.py` | added | 15 tests for AC-39 and AC-38, including the bounds checked against the fixtures' own implementation |
+| `layer/core/injection.py` | added | H12's second half: instruction-shaped text in ingested content, detected and logged, never filtered |
+| `layer/onboarding/run.py`, `layer/onboarding/persist.py` | modified | The two places ingested text enters — a spec document and a case input — scan it |
+| `layer/findings/queries.py` | modified | EC-3: a drift finding resting on one run says there is no history |
+| `layer/answers/reads.py` | modified | Version-change marking and the unexplained-variance groups (US-8, H1); the cross-product answer (US-11) |
+| `layer/mcp/server.py` | modified | `findings_across_products`, so the surface answers the question asked without naming a product |
+| `layer/adapters/*`, `layer/refs/ref.py`, `layer/core/freshness.py` | modified | Ten fixture references removed — see below |
+| `tests/test_findings.py`, `tests/test_enforcement_adapter.py` | modified | AC-37's two halves marked on the tests that already proved them |
+| `CLAUDE.md`, `README.md` | modified | The drift this step was always going to have to fix |
+
+**The agnosticism test found ten violations, and two were mine from this same week.** R1 is
+"no product name, metric name or ref prefix appears anywhere outside `tests/`", and
+Appendix F is blunter: "nothing in the implementation may reference them". Inside `layer/`
+there were ten — in docstrings, a glob example, and one in a **user-facing error message**
+that would have told a tenant with no such product to go and look at another company's
+clause ref. Two had been added in steps 11 and 12, by someone who had read the rule twice
+and written it into `CLAUDE.md` once. That is the argument for the test in one line: a rule
+nothing checks is a preference.
+
+It greps the source rather than inspecting imports, because R1 is about every string a
+reader or a caller can see — a comment, a default, an error message — and an import graph
+would have found none of the ten.
+
+**The matrix keeps no list of its own.** It parses the refs out of PRD Part C and the story
+bodies, and collects every `@pytest.mark.ac`, `hard_case`, `edge_case` and `story` in
+`tests/`. A file with its own copy of the list would agree with itself forever; this one
+fails the first time a criterion is added to the specification with nothing covering it.
+
+**A deferral is a declaration, not an exemption.** Each names its phase and why it cannot be
+covered now, and a deferral for something that *is* covered fails too, so the list cannot
+rot into an excuse. Nothing is skipped and nothing is `xfail`: the suite reports what is
+true today.
+
+| | |
+|---|---|
+| Refs in the matrix | 80 — 39 criteria, 16 hard cases, 12 edge cases, 13 stories |
+| Tested | 62 |
+| Partly tested, with the covered half stated | 7 — AC-6, H2, H7, H10, EC-1, EC-8, EC-11 |
+| Deferred with a phase and a reason | 11 — AC-16, AC-34 to AC-36, EC-5, EC-10, EC-12, US-1, US-2, US-10, US-12 |
+| With no test and no declared deferral | **0** |
+| Story criteria | 59, of which 38 are tested and 21 belong to the four deferred stories |
+
+**No test had ever carried the `story` marker.** `pytest.ini` declared it in step 1 and
+nothing used it for twelve steps, so AC-11 — "every US-1 to US-13 acceptance criterion has
+a test" — could not be answered by running anything. It is now 38 tests, one per criterion,
+each quoting the criterion it covers. The matrix counts them per story, so a story with four
+`shall` clauses needs four tests rather than one.
+
+**Where a criterion's positive behaviour belongs to a later phase, the test covers the half
+that exists and says which.** That is almost always a refusal naming what is missing, and it
+is the required behaviour today rather than a stand-in: B1 forbids silently returning
+nothing, and "no stalled decisions" from a Layer with no decision source would be a claim
+about records it has never seen.
+
+**AC-39 had no test at all, over the most load-bearing arithmetic in the codebase.** The
+Wilson interval was exercised only through onboarding verdicts, where a wrong bound shifts a
+count nobody was asserting exactly, and `layer/verdicts/stats.py` was tested nowhere. Every
+`met` and every `missed` the Layer has ever produced came out of those forty lines. The
+bounds are now compared against the fixtures' own `shared/stats.py` across 1,300 pairs —
+the Layer reimplements rather than imports it, which is correct under Appendix F and is also
+the risk, and a sweep against the original is the only check that would catch a
+transcription error in either.
+
+**Three behaviours the specification requires and nothing produced.** Each was found by
+writing the test, not by reading the code.
+
+*H12's second half.* "Treated as data. Logged as a possible injection attempt." The first
+half held everywhere — no ingested string is evaluated, interpolated into a prompt or used
+to choose a code path — and the second existed nowhere. `layer/core/injection.py` is a
+detector, not a filter: the clause still imports and the case still stores, because a filter
+would make the Layer's own record disagree with the source it cites. Its patterns stay
+narrow against a test that a specification sentence like "the system shall ignore malformed
+responses" is not mistaken for an attack, because a detector that cried wolf would be
+switched off within a week.
+
+*EC-3.* A single breaching run produced "missed in 1 of 1 runs, worst 80%" — a sentence
+shaped like a trend at the exact moment a reader is least able to tell. It now leads with
+the fact that there is one run and no history. EC-3's other half, "every clause stays
+`provisional`", contradicts B2's own definition of `measured` as "a baseline run exists", so
+B2 wins and the criterion is recorded as one to amend, beside AC-25 and AC-26.
+
+*H1 and US-8's third criterion.* "Versioning does not explain the movement" was in a
+docstring and in nothing the Layer ever said. H1 had a test that the condition exists in the
+fixture history and none that anything reports it. `metric_history` now names the groups of
+runs that record identical inputs and differ in value — **grouped, not pairwise**: the
+fixture's instance is three runs sharing one prompt sha and one corpus sha while scoring 92,
+92 and 94, so the first implementation, which compared neighbours, found nothing in a
+history built to contain it.
+
+**Two small capabilities the stories needed.** The points where a recorded input changed are
+marked in a history, rather than left for a reader to compare twelve rows by eye (US-8). And
+a question asked without naming a product answers across the tenant with every finding
+attributed to its product (US-11), which did not exist in any surface.
+
+**The documents that disagreed with the code, which this step was always going to fix.**
+`CLAUDE.md` said `README.md` documents EarlyEcho, when `README.md` has been this project's
+since `de21e88`; its closed-set list named five columns and the schema has nine; and its
+hard constraints stopped at eight, carrying none of B3 rules 10 to 12 or B11's
+`confirm_binding` rule — the four things steps 10 to 12 were built around. `README.md`
+advertised 12 tables, three of the five findings, 312 tests and "steps 8 of 10".
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+........................................................................ [ 90%]
+......................................................                   [100%]
+558 passed in 169.01s (0:02:49)
+
+$ .venv/bin/python -m pytest tests/test_matrix.py -s
+80 rows: 62 tested, 7 partly tested, 11 deferred, 0 with no test
+```
+
+Covering: every fixture name, metric name and ref prefix absent from `layer/`, asserted per
+name over every shipped file including the migrations; no adapter branching on a product key
+or pattern; the open vocabularies carrying no Postgres enum and the closed ones carrying
+their CHECK; no default or pattern definition naming a product; the fixture repository
+unimported; and the converse, that the tests do name the products, without which every
+assertion above would be trivially true. Then every hard case, edge case, story criterion and
+acceptance criterion either claimed by a test or declared with its phase — and the matrix
+itself guarded, so a parse returning nothing fails rather than reporting full coverage.
+
+---
+
 ## Next
 
-**Step 13**, the last of phases 1 to 3: the agnosticism grep test, and the AC matrix that
-closes AC-10 to AC-12 across **39** criteria — including the user-story tests that nothing
-covers yet, the markers AC-37 and AC-38 are missing over behaviour that already works, the
-Wilson interval test AC-39 asks for and nothing has, and a statement of which criteria
-belong to phases 5 to 7 rather than reporting them as failures.
+**Phases 1 to 3 are done.** What follows is phase 5, then phase 4 as a spike, then phase 6 —
+the order and the reasoning are in "Beyond phase 3" below, and the per-criterion state is in
+"What is left, at a glance" above.
+
+**Phase 5, the write half**, which is where the one metric that matters has never been
+measured. It needs three things the plan does not yet carry, written up below: an actor model
+that is identity rather than authentication, the generators that produce proposals at all,
+and the critic that scores them and never decides. AC-16 is the gate — twenty proposals
+decided by a person — and it cannot be reached without a person, so the number lands where it
+lands (EC-5).
+
+**Phase 4 is a half-day spike**, not a deferral, and it answers open question 2: what auth
+hosted Dust's credential policy accepts for a remote MCP server. Nothing in the Layer changes
+when it is answered; `run(transport=...)` already takes the argument.
 
 **And two documents that disagree with the code.** `CLAUDE.md` says `README.md` documents
 EarlyEcho, when `README.md` is the Layer's since `de21e88`; its closed-set list omits
