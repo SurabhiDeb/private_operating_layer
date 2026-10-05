@@ -28,7 +28,7 @@ searching for it.
 | 9 | Migration 5: `case_result`, the freshness columns, `harvest_cap` | **done** |
 | 10 | The evidence spine through the pipeline: redaction, per-case outcomes, storage, `failing_cases` | **done** |
 | 11 | Freshness: a verdict degrades rather than freezing | **done** |
-| 12 | The stdio MCP server, to PRD B11 | not started |
+| 12 | The stdio MCP server, to PRD B11 | **done** |
 | 13 | The agnosticism grep test, the AC matrix, the user-story tests | not started |
 
 **Why the MCP server is step 12 and not step 9.** PRD B11 is the specification for that
@@ -41,7 +41,7 @@ arrived with the 3 October revision and are recorded in its own Part D3.
 
 | | |
 |---|---|
-| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27, AC-28, AC-29, AC-30 |
+| Acceptance criteria met | AC-1, AC-2, AC-3, AC-4, AC-5, AC-7, AC-8, AC-9, AC-13, AC-14, AC-15, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-26, AC-27, AC-28, AC-29, AC-30, AC-31, AC-32 |
 | Criteria with tests that do **not** yet meet them | AC-33 is proven for storage only, since nothing reads `harvest_cap` until the write half exists. AC-37 and AC-38 have behaviour and tests that no marker connects to them, and AC-39 has no direct test at all — see "What is left" below. AC-23 holds with one limit stated in step 10: a deleted trace is recognised from the window the source declares, not from a fetch that found the body gone, because AC-24 forbids the live call in that path |
 | Hard cases | H1, H3, H5, H6, H8, H11, H14, H15, H16 |
 | Edge cases | EC-2, EC-4, EC-6, EC-9 |
@@ -61,8 +61,8 @@ What is still outstanding, and where each piece lands, is the table in "What is 
 a glance" below. It is kept in one place so the answer does not have to be assembled from
 this file's prose.
 
-**Tests:** 423 passing. **Migrations:** 5. **Commits:** 37 on `layer-phase-1-3`, ahead of
-`main` and all pushed, through steps 10 and 11. The count is
+**Tests:** 457 passing. **Migrations:** 5. **Commits:** 40 on `layer-phase-1-3`, ahead of
+`main`, with the last three unpushed: step 12, its record, and a correction to this line. The count is
 `git rev-list --count main..HEAD`, not recollection — it said 29 until step 10 and was stale
 by four. Step 9 and the first half of step 10 both arrived in `455dcb5`, which is why step
 9's file table and part of step 10's name the same commit.
@@ -77,13 +77,13 @@ criteria are PRD C3's, which holds **39** of them, AC-1 to AC-39.
 
 | Criterion | What it needs | Lands in |
 |---|---|---|
-| AC-6 | A requirement, decision and config source to trace a chain through. Nothing to build until they exist | phase 6 |
+| AC-6 | **The walk is done and proven** over a six-link chain in step 12; what is left is a source that produces requirements, decisions and tickets, so a real product's chain is complete rather than hand-written | phase 6 |
 | AC-10 | A test per hard case, H1 to H16 | step 13 |
 | AC-11 | A test per criterion of each user story. **No test carries the `story` marker**, the one of `pytest.ini`'s five never wired up, so this cannot be answered by running the suite today | step 13 |
 | AC-12 | The AC matrix itself: every criterion mapped to the test that proves it, and the ones belonging to later phases stated as such rather than reported as failures | step 13 |
 | AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. Needs the write half and the critic | phase 5 |
-| AC-31 | The served tool list, with the human-only tier absent from the module rather than merely undecorated | step 12 |
-| AC-32 | Every Part C criterion passing over stdio with no Dust at all | step 12 |
+| ~~AC-31~~ | Met in step 12. Asserted against the served tool list **and** by grepping the module for the human-only definitions | done |
+| ~~AC-32~~ | Met in step 12: every tool returns one of B1's four shapes, no tool takes an `org_id`, and one test drives `layer serve` over a real pipe | done |
 | AC-33 | Something that **reads** `harvest_cap`. Stored since step 9 and read by nothing until the write half exists | phase 5 |
 | AC-34 | `proposal.rank` and the signals behind it, so a human can disagree with the ordering | phase 5 |
 | AC-35 | A harvested case surviving into an eval suite with its provenance | phase 5 |
@@ -93,7 +93,7 @@ criteria are PRD C3's, which holds **39** of them, AC-1 to AC-39.
 | AC-39 | **A test that does not exist.** The Wilson interval at the pinned Z is exercised only through onboarding verdicts; `layer/verdicts/stats.py` is tested nowhere on its own, and "a clause with few cases returns `cannot_confirm` rather than `met` on a favourable point estimate" is asserted by no test directly | step 13 |
 
 Everything else in C3 is met and marked: AC-1 to AC-5, AC-7 to AC-9, AC-13 to AC-15, AC-17
-to AC-30. Counted by grepping the specification and the test markers together rather than
+to AC-32. Counted by grepping the specification and the test markers together rather than
 from recollection, which is how the 36-versus-39 discrepancy above came to light.
 
 **Four open items, none of them blocking.** Each is written up in full under "Open items
@@ -1564,28 +1564,143 @@ stamping the source it read even when it stored nothing.
 
 ---
 
+## Step 12 — The stdio MCP server, to PRD B11. Done.
+
+**What it had to achieve.** The whole product reachable from a terminal with no UI, no
+agent runtime and no Dust, with the approval boundary inside the server rather than in
+anybody's prompt.
+
+**Files.** Commit `d187173`.
+
+| File | | What it holds and why |
+|---|---|---|
+| `layer/answers/shapes.py` | added | B1's `Answer` and `ProposedChange`. The Answer enforces its own rules in the constructor: a non-empty `stale_sources` caps confidence at medium and adds its caveat, and lowering confidence without saying why is refused outright |
+| `layer/answers/reads.py` | added | The read tier as functions over a session — products, sources, clauses, metric history, the proof tool, the chain. Knows nothing about MCP |
+| `layer/answers/writes.py` | added | The write tier, with every B3 and B4 check in one place so no proposal path can skip one |
+| `layer/answers/__init__.py` | added | The package's own argument for existing: the answers are independent of the transport that serves them |
+| `layer/mcp/server.py` | added | The transport. Nineteen tools, the human-only tier absent, the org and the actor bound at startup |
+| `layer/cli.py` | modified | `layer serve --transport stdio`, printing nothing on success because stdout is the protocol's channel |
+| `layer/findings/queries.py` | modified | `violates` and `failing_cases_for` made public, so the tool and the finding cannot drift apart |
+| `layer/findings/citations.py` | modified | The clause resolver no longer resolves a ref no clause carries — see the defect below |
+| `tests/test_mcp.py` | added | 34 tests: the boundary, the shapes swept across the surface, the proof tool, the chain, the write tier, and one real stdio pipe |
+
+**The boundary is structural, and the test is written to catch the way it would really
+break.** AC-31 asserts against the served tool list, and a second test greps the module
+for `def register_product(`, `def confirm_binding(` and the rest: B11 requires the third
+tier to be **absent**, not undecorated, because a function sitting in the file is one
+decorator away from being served and a reviewer would have to notice an absence from a
+list rather than an absence from the file. `confirm_binding` is the one that is easy to
+miss — an agent able to confirm its own binding manufactures B3 rule 8's precondition and
+can then propose anything at all, which turns the gate into a formality.
+
+**`layer/answers/` exists so that phase 4 really is one argument.** PRD D2's reason for
+taking phase 5 first is that phase 4 "adds no capability (one `run(transport=...)`
+argument)", and that is only true if the answers do not live inside the transport. They
+do not: `layer/mcp/server.py` is nineteen thin wrappers, and the same functions already
+serve the CLI.
+
+**B11's own sketch contradicts B11's rule 4, and rule 4 wins.** The tool list is written
+`list_products(org)`, while rule 4 of the same section is "every tool is tenant-scoped in
+the data layer. No tool takes an `org_id` from its caller". An argument would be a
+documented route across the boundary, so the org is bound to the process at startup — from
+`--org` or `LAYER_ORG_ID` — and a test sweeps every tool's input schema for an argument
+whose name contains "org". Recorded here rather than silently resolved.
+
+**The actor is identity, not authentication.** Writes are attributed to `--as`, the same
+argument every other command takes, and the server cannot verify the claim. That is the
+same line the phase 5 decision draws, and sessions and bearer tokens stay in phase 4.
+
+**`find_underspecified` is served although B11 lists four of the five findings.** B11 rule
+6 is that the surface is the whole product — "anything a human can learn from the Layer is
+learnable through these tools" — and `underspecified` is a finding kind B1 defines and the
+CLI already answers. Omitting it would make the MCP surface narrower than the terminal's,
+which A6 forbids.
+
+**`trace_chain` carries its path, so a cycle terminates.** One recursive CTE walks both
+directions and appends each new ref to an array that the next hop is checked against, so
+two records pointing at each other stop rather than running to the depth cap. The cap is
+ten and not six: a walk that stopped exactly at AC-6's length would answer the criterion
+and silently truncate anything longer. Gaps are named against `EXPECTED_CHAIN`, which is
+six link types held as data — US-5 requires an absent link to be named, and that is only
+possible against a stated expectation.
+
+**What AC-6 is and is not proven by.** The six-link chain resolves end to end in one call,
+with every link's type and source kept, over links **written by hand in the test**. No
+source the Layer can bind produces a requirement, a decision or a ticket until phase 6, so
+the mechanism is proven and a real product's chain is not. The test says so and so does
+the outstanding table; the marker alone would imply both.
+
+**A defect in step 8's code, found by a test written to fail.** The clause resolver read a
+clause's `source_locator` and then built the spec file's URL **whether or not the clause
+existed**, so `clause:NOPE-1` resolved to a real URL. A proposal citing it was therefore
+accepted as having resolvable evidence — B3 rule 7, "never cite a record it did not read",
+broken by a missing null check since step 8, and invisible because every ref the suite had
+ever resolved was real. An unknown ref now lands in `unresolved`, where B1 requires it to
+be displayed.
+
+**Four tests in this file passed vacuously, and the fix is in the test rather than the
+code.** The fixture onboarded a product inside an open `org_session` and never committed,
+the server opened its own session as it really will, saw nothing, and refused every call —
+and a refusal is one of B1's four shapes, so a sweep asserting "every tool returns one of
+the four shapes" was satisfied by a server that could see no data at all. The fixture now
+commits, and the sweep names the eight tools that must answer rather than refuse. The
+lesson generalises: a shape test over a vocabulary that includes the failure mode proves
+nothing unless something also asserts the success.
+
+**One test drives a real pipe.** `python -m layer serve` in a subprocess, an MCP
+`initialize`, `tools/list`, and a `find_drift` call returning findings. Everything else in
+the file calls the server in-process, which would pass just as well if the transport were
+broken, the CLI entry point missing, or stdout polluted by a banner — that last being the
+easy mistake, since stdout is the protocol's own channel and anything written to it is a
+parse error at the other end.
+
+**Verification.**
+
+```
+$ .venv/bin/python -m pytest
+........................................................................ [ 94%]
+.........................                                                [100%]
+457 passed in 115.07s (0:01:55)
+```
+
+The output was read as well as asserted:
+
+```
+LIST_PRODUCTS  -> answer   1 product(s) onboarded: triage (live).
+GET_CLAUSE     -> answer   TRI-11.2 Escalation recall states >= 0.99. It is measured
+                           and reads cannot_confirm, latest 1 in run 20260915-150650Z-v2.
+                           0 link(s) touch it.          citations 2, resolved 2
+FAILING_CASES  -> answer   TRI-11.2 >= 0.99: 7 of 47 run(s) miss the bar, and 7 case(s)
+                           across them are recorded as failing.   citations 8, resolved 8
+TRACE_CHAIN    -> answer   clause:TRI-11.2 reaches 0 other record(s) over 0 link(s).
+                           6 expected link type(s) are absent.    confidence
+                           cannot_determine, 1 caveat naming all six
+```
+
+Covering: no human-only tool served and none defined in the module; `confirm_binding`,
+`accept_proposal` and `reject_proposal` by name; no tool accepting an `org_id`; every
+B11 tool present and described; every read returning one of the four shapes **and** the
+eight that must answer answering; every answer stating a confidence and carrying a caveat
+whenever it is not high; no statement longer than five sentences; no answer reporting
+neither a link nor an unresolved ref; a clean install refusing every read by name with
+zero proposals; the proof tool naming 7 of 47 runs and the same cases the finding cites; a
+window narrowing the runs and an unreadable one refusing; a six-link chain end to end, a
+gap named, a link walked in either direction, a cycle terminating, and a non-ref refused;
+a proposal created open and undecided with an audit event, and refused for unresolvable
+evidence, no evidence, no `if_rejected`, a duplicate open target, an unknown field, an
+unknown link type, and a product with no confirmed binding; `propose_binding` leaving the
+bindings untouched; a recorded case input redacted whatever the caller sent and dropped on
+a passing case; and the server answering over a real stdio pipe.
+
+---
+
 ## Next
 
-**Step 12, the stdio MCP server, to PRD B11.** The full read tier including `list_products`,
-`get_product`, `source_status`, `failing_cases` and `trace_chain`, and the write tier including
-`record_case_results` and `propose_binding`. PRD A6's bar is "fully usable over stdio from a
-terminal with no Dust at all, and every acceptance criterion in Part C must pass that way".
-
-`mcp` 2.2.0 is already installed and its surface verified in step 1: `MCPServer` from
-`mcp.server.mcpserver`, tools via a `@server.tool()` decorator, transport an argument to
-`run()`. The human-only tier — `register_product`, `bind_source`, **`confirm_binding`**,
-`reject_binding`, `accept_proposal`, `reject_proposal` — is absent from the module rather than
-merely undecorated, in any phase. AC-31 tests that against the served tool list, because a
-boundary that holds only while nobody adds a decorator is not a boundary.
-
-`trace_chain` is the one piece of new query work — a recursive CTE over `link`. It will return
-mostly gaps until phase 6 binds the sources that fill the chain, and naming each gap is the
-required behaviour rather than a shortfall (US-5: "where a link in the expected chain is
-absent, the Layer shall name the gap rather than omitting it").
-
-**Step 13**: the agnosticism grep test, and the AC matrix that closes AC-10 to AC-12 across
-36 criteria — including the user-story tests that nothing covers yet, and a statement of which
-criteria belong to phases 5 to 7 rather than reporting them as failures.
+**Step 13**, the last of phases 1 to 3: the agnosticism grep test, and the AC matrix that
+closes AC-10 to AC-12 across **39** criteria — including the user-story tests that nothing
+covers yet, the markers AC-37 and AC-38 are missing over behaviour that already works, the
+Wilson interval test AC-39 asks for and nothing has, and a statement of which criteria
+belong to phases 5 to 7 rather than reporting them as failures.
 
 **And two documents that disagree with the code.** `CLAUDE.md` says `README.md` documents
 EarlyEcho, when `README.md` is the Layer's since `de21e88`; its closed-set list omits
