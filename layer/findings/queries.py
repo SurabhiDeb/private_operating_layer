@@ -16,6 +16,13 @@ true, and collapsing them would lose one of them.
 v3" is permitted, "the prompt change caused it" is forbidden. Every sentence below is built
 from counts, values and timestamps.
 
+**A finding resting on an old measurement says so, in words.** Every set carries
+`stale_sources`, every finding that rests on a measurement carries `as_of`, and one outside
+its source's window carries `stale` and a sentence naming the source and the age (B3 rule
+12, AC-29). The window is the source's own: a global threshold would be the Layer inventing
+a cadence for somebody else's eval suite, and the one that used to live here — 30 days, for
+every product alike — is gone.
+
 **A drift finding cites the cases that missed the bar.** B3 rule 10: an empty
 `failing_cases` beside `runs_missed > 0` "is a defect, not a terse answer". It can also be
 an honest answer — a source that reports a metric as a single number has no per-case layer
@@ -27,11 +34,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from layer.core import freshness
 from layer.core.errors import Refusal
 from layer.db.models import (
     Binding,
@@ -58,10 +65,6 @@ from layer.findings.shapes import (
     FindingSet,
 )
 from layer.onboarding import bindings as binding_gate
-
-#: A bound clause whose newest measurement is older than this is reported as stale rather
-#: than as passing. A number that stopped being taken is not evidence that nothing changed.
-STALE_AFTER = timedelta(days=30)
 
 #: How many individual cases a drift finding carries. A cap, because a finding is read by a
 #: human and fifty cases is already more than anyone reviews in one sitting — and
@@ -106,6 +109,8 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
     condition this product exists to surface.
     """
     out: list[Finding] = []
+    windows = freshness.windows_for(session, product.id)
+    now = _now(session)
     for bar in _bars(session, product):
         rows = _series(session, product.id, bar.metric)
         if not rows:
@@ -119,6 +124,7 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
         first = breaching[0]
         current = _violates(bar.clause, latest.value)
         cases, cases_total, cases_state = _failing_cases(session, product, breaching)
+        staleness = _staleness(windows, latest, now)
 
         out.append(Finding(
             kind=DRIFT,
@@ -126,8 +132,11 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
             clause_ref=bar.clause.ref,
             first_seen=first.measured_at,
             current=current,
+            as_of=latest.measured_at,
+            stale=bool(staleness and staleness.stale),
             summary=_drift_summary(
-                bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state
+                bar, rows, breaching, worst, latest, current, cases, cases_total,
+                cases_state, staleness,
             ),
             evidence=(
                 [f"clause:{bar.clause.ref}"]
@@ -151,6 +160,8 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
                 "failing_cases": cases,
                 "failing_cases_total": cases_total,
                 "failing_cases_state": cases_state,
+                "as_of": latest.measured_at.isoformat(),
+                "staleness": staleness.as_dict() if staleness else None,
                 "breach_revisions": sorted({r.code_rev for r in breaching if r.code_rev}),
                 "clean_revisions": sorted(
                     {r.code_rev for r in rows if r.code_rev}
@@ -162,7 +173,8 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
 
 
 def _drift_summary(
-    bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state
+    bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state,
+    staleness=None,
 ) -> str:
     parts = [
         f"{bar.clause.ref} {bar.clause.label or bar.metric} {_bar_text(bar.clause)} "
@@ -180,12 +192,24 @@ def _drift_summary(
             f"{_value_text(bar.clause, latest.value)}, so a check on the latest run alone "
             f"shows nothing."
         )
+    elif staleness is not None and staleness.stale:
+        # "still misses" is a claim about now, and the next sentence is about to say this
+        # measurement is not current. Caught by reading the output: the two sentences
+        # together asserted and withdrew the same thing.
+        parts.append(
+            f"The newest run on record, {latest.run_id or 'the most recent'}, is at "
+            f"{_value_text(bar.clause, latest.value)}, below the bar."
+        )
     else:
         parts.append(
             f"The latest run, {latest.run_id or 'the most recent'}, is at "
             f"{_value_text(bar.clause, latest.value)} and still misses the bar."
         )
     parts.append(_cases_sentence(cases, cases_total, cases_state))
+    if staleness is not None and staleness.stale:
+        # AC-29: the age in the finding's own words, not only in a field. Placed before
+        # the revisions so a reader meets the caveat before the detail it qualifies.
+        parts.append(f"The newest run here is not current — {staleness.describe()}.")
 
     breach_revs = sorted({r.code_rev for r in breaching if r.code_rev})
     clean_revs = sorted({r.code_rev for r in rows if r.code_rev} - set(breach_revs))
@@ -423,7 +447,8 @@ def find_uncovered(session: Session, *, product: Product, registry=None) -> Find
     out: list[Finding] = []
     bound = binding_gate.confirmed_metrics(session, product=product)
     bound_refs = set(bound.values())
-    now = session.execute(select(func.now())).scalar_one()
+    now = _now(session)
+    windows = freshness.windows_for(session, product.id)
 
     for clause in _measurable_clauses(session, product):
         if clause.ref not in bound_refs:
@@ -447,16 +472,25 @@ def find_uncovered(session: Session, *, product: Product, registry=None) -> Find
             continue
 
         latest = rows[-1]
-        if latest.measured_at < now - STALE_AFTER:
-            age = (now - latest.measured_at).days
+        staleness = _staleness(windows, latest, now)
+        if staleness is not None and staleness.stale:
+            # Reported against the source's own window rather than a number chosen here.
+            # A quarterly review source is not overdue at 31 days, and a nightly eval is
+            # overdue long before that — one threshold cannot be right for both.
             out.append(_uncovered(
                 product, clause, NOT_MEASURED_RECENTLY,
-                f"{clause.ref} was last measured {age} days ago, in run "
-                f"{latest.run_id or 'the most recent'}. A number that stopped being taken "
-                f"is not evidence that nothing changed.",
+                f"{clause.ref} was last measured in run "
+                f"{latest.run_id or 'the most recent'}, and {staleness.phrase()}. "
+                f"A number that stopped being taken is not evidence that nothing changed.",
                 metric=metric,
                 evidence_extra=[f"obs:{latest.id}"],
-                detail_extra={"days_since": age, "latest_run": latest.run_id},
+                detail_extra={
+                    "latest_run": latest.run_id,
+                    "as_of": latest.measured_at.isoformat(),
+                    "staleness": staleness.as_dict(),
+                },
+                as_of=latest.measured_at,
+                stale=True,
             ))
 
     # The other direction. H16: measured, promised nowhere.
@@ -486,7 +520,8 @@ def find_uncovered(session: Session, *, product: Product, registry=None) -> Find
 
 
 def _uncovered(
-    product, clause, reason, summary, *, metric=None, evidence_extra=None, detail_extra=None
+    product, clause, reason, summary, *, metric=None, evidence_extra=None,
+    detail_extra=None, as_of=None, stale=False,
 ) -> Finding:
     return Finding(
         kind=UNCOVERED,
@@ -494,6 +529,8 @@ def _uncovered(
         clause_ref=clause.ref,
         first_seen=None,
         current=True,
+        as_of=as_of,
+        stale=stale,
         summary=summary,
         evidence=[f"clause:{clause.ref}", *(evidence_extra or [])],
         detail={
@@ -517,7 +554,9 @@ def find_stalled_decisions(session: Session, *, product: Product, registry=None)
     from layer.onboarding import state
 
     if not state.sources_by_role(session, product=product).get("decision"):
-        return FindingSet(STALLED_DECISION, refusal=Refusal(
+        return FindingSet(STALLED_DECISION, stale_sources=freshness.stale_sources(
+            session, product=product,
+        ), refusal=Refusal(
             reason=(
                 f"{product.key} has no decision source bound, so decisions that produced no "
                 f"action cannot be found. An empty answer here would be a claim about "
@@ -537,7 +576,9 @@ def find_underspecified(session: Session, *, product: Product, registry=None) ->
     from layer.onboarding import state
 
     if not state.sources_by_role(session, product=product).get("production"):
-        return FindingSet(UNDERSPECIFIED, refusal=Refusal(
+        return FindingSet(UNDERSPECIFIED, stale_sources=freshness.stale_sources(
+            session, product=product,
+        ), refusal=Refusal(
             reason=(
                 f"{product.key} has no production source bound. An under-specified "
                 f"requirement is one whose eval passes while production sits outside its "
@@ -587,7 +628,9 @@ def _resolved(
             registry = registry_for(session, product=product)
         for finding in findings:
             finding.resolve(registry)
-    return FindingSet(kind, findings)
+    return FindingSet(
+        kind, findings, stale_sources=freshness.stale_sources(session, product=product)
+    )
 
 
 # -- shared ----------------------------------------------------------------------
@@ -701,6 +744,27 @@ def _value_text(clause: Clause, value: float) -> str:
 def _now(session: Session):
     """The database's clock, not the process's. Every other timestamp here came from it."""
     return session.execute(select(func.now())).scalar_one()
+
+
+def _staleness(windows: dict, observation, now):
+    """How old one observation is against the window of the source that delivered it.
+
+    Per observation rather than per product, because a product's sources do not share a
+    cadence: a nightly eval and a quarterly review are both normal, and a finding resting
+    on one says nothing about the other. An observation with no source, or a source with
+    no stated window, yields None and nothing is degraded or reported.
+
+    `windows` and `now` are read once per query and passed in. Deliberately not cached on
+    the session: a cache that outlived the query would answer with the window a source had
+    before somebody changed it, which is the same class of mistake as a stale measurement
+    read as current.
+    """
+    window = windows.get(observation.source_id)
+    if window is None or window.window is None:
+        return None
+    return freshness.staleness_of(
+        observation.measured_at, window=window.window, now=now, source=window.label
+    )
 
 
 def _plain(value: float | None) -> str:

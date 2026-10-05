@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import field as dc_field
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from layer.core import audit
+from layer.core import audit, freshness
 from layer.core.durations import format_duration
 from layer.core.errors import NotLive, UnknownProduct
 from layer.db.models import Binding, Clause, Observation, Product, Source
@@ -63,10 +64,13 @@ class Status:
     confirmed_bindings: int
     pending_candidates: int
     verdicts: dict[str, int]
+    #: PRD B1's `stale_sources`. Empty is the required state; a non-empty list is shown in
+    #: words, because AC-29 is explicit that a field alone does not count.
+    stale_sources: list[dict] = dc_field(default_factory=list)
 
     def describe(self) -> str:
         roles = ", ".join(f"{r}×{n}" for r, n in sorted(self.sources.items())) or "none"
-        return (
+        lines = (
             f"{self.product}: {self.status} (step {self.step})\n"
             f"  sources       {roles}\n"
             f"  clauses       {self.clauses} ({self.measurable_clauses} with a numeric bar)\n"
@@ -75,6 +79,9 @@ class Status:
             f"{self.pending_candidates} awaiting a decision\n"
             f"  verdicts      " + (", ".join(f"{k} {v}" for k, v in sorted(self.verdicts.items())) or "none")
         )
+        for entry in self.stale_sources:
+            lines += f"\n  OVERDUE       {entry['note']}"
+        return lines
 
 
 # -- step 1 ----------------------------------------------------------------------
@@ -189,12 +196,23 @@ def require_source(session: Session, *, product: Product, role: str) -> list[Sou
 # -- step 6 ----------------------------------------------------------------------
 
 
-def measure(session: Session, *, product: Product, actor: str) -> dict[str, int]:
+def measure(
+    session: Session, *, product: Product, actor: str, now: datetime | None = None
+) -> dict[str, int]:
     """Give every clause a verdict, and move the product to `live`.
 
     Every clause gets one, including `not_applicable` and `not_measured` — PRD B6 sets
     "clauses with a verdict" at 100%, so silence is not an option. Only confirmed bindings
     are joined through, so a pairing a human declined cannot produce a verdict.
+
+    **This is also where staleness is applied.** A measurement outside its source's
+    `freshness_window` degrades `met` and `missed` to `cannot_confirm` rather than holding
+    its last good value (B3 rule 12, AC-28), and the pass brings every source's `status`
+    and `overdue_since` in line with the clock on its way out.
+
+    `now` is the seam a test needs to advance the clock past a window, and defaults to the
+    database's own. It is not an override for operational use: passing a time that is not
+    now would write verdicts nobody can reproduce.
     """
     if product.status not in (ASSERTIONS_CONFIRMED, LIVE):
         pending = len(binding_gate.propose(session, product=product).pending)
@@ -207,29 +225,51 @@ def measure(session: Session, *, product: Product, actor: str) -> dict[str, int]
     bound = binding_gate.confirmed_metrics(session, product=product)
     by_ref: dict[str, str] = {ref: metric for metric, ref in bound.items()}
 
+    at = now or freshness.clock(session)
+    windows = freshness.windows_for(session, product.id)
+
     counts: dict[str, int] = {}
+    degraded: list[str] = []
     for clause in session.execute(
         select(Clause).where(Clause.product_id == product.id, Clause.status == "active")
     ).scalars():
         metric = by_ref.get(clause.ref)
         latest = _latest(session, product.id, metric) if metric else None
+        window = windows.get(latest.source_id) if latest is not None else None
         judgement = judge(
             kind=clause.kind,
             comparator=clause.comparator,
             value=clause.value,
             value_high=clause.value_high,
             latest=latest,
+            staleness=freshness.staleness_of(
+                latest.measured_at if latest else None,
+                window=window.window if window else None,
+                now=at,
+                source=window.label if window else None,
+            ),
         )
         clause.verdict = judgement.verdict
-        clause.verdict_at = session.execute(select(func.now())).scalar_one()
+        clause.verdict_at = at
         clause.state = state_for(
             has_measurement=latest is not None, ratified=clause.state == "ratified"
         )
         counts[judgement.verdict] = counts.get(judgement.verdict, 0) + 1
+        if judgement.degraded_from:
+            degraded.append(f"{clause.ref} would have read {judgement.degraded_from}")
 
+    # On the way out, not on the way in: the verdicts above were judged against `at`, and
+    # a status refreshed first would be describing a different moment than they were.
+    sources = freshness.refresh(session, product=product, now=at)
+
+    detail = {"verdicts": counts, "bound_metrics": len(bound), "sources": sources}
+    if degraded:
+        # Named, not counted. A verdict that moved because its evidence aged is the one
+        # thing an operator has to be able to find after the fact (B5 item 10).
+        detail["degraded_for_staleness"] = degraded
     audit.record(
         session, org_id=product.org_id, actor=actor, action=audit.VERDICTS_COMPUTED,
-        subject=f"product:{product.key}", detail={"verdicts": counts, "bound_metrics": len(bound)},
+        subject=f"product:{product.key}", detail=detail,
     )
     _set_status(session, product, LIVE, actor)
     return counts
@@ -322,6 +362,7 @@ def status(session: Session, *, product: Product) -> Status:
         ).scalar_one(),
         pending_candidates=len(proposal.pending),
         verdicts=verdicts,
+        stale_sources=freshness.stale_sources(session, product=product),
     )
 
 
@@ -335,5 +376,6 @@ def _latest(session: Session, product_id: uuid.UUID, metric: str) -> Measurement
     if row is None:
         return None
     return Measurement(
-        value=row.value, passed=row.passed, total=row.total, observation_id=row.id
+        value=row.value, passed=row.passed, total=row.total, observation_id=row.id,
+        measured_at=row.measured_at, source_id=row.source_id,
     )

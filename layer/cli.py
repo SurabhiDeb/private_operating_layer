@@ -17,6 +17,7 @@ import uuid
 
 from sqlalchemy import select
 
+from layer.core import freshness
 from layer.core.db import org_session, unscoped_session
 from layer.core.durations import format_duration, parse_duration
 from layer.core.errors import LayerError, Unreadable
@@ -172,6 +173,11 @@ def _measure(args) -> int:
         print(f"{product.key}: {product.status}")
         for verdict, count in sorted(counts.items()):
             print(f"  {verdict:16} {count}")
+        # Said here as well as on `status`, because this is the command that just moved
+        # those verdicts and an operator reading a wall of cannot_confirm is owed the
+        # reason in the same output (AC-29, AC-30).
+        for entry in freshness.stale_sources(session, product=product):
+            print(f"  OVERDUE          {entry['note']}")
     return 0
 
 
@@ -195,9 +201,17 @@ def _findings(args) -> int:
                     print(f"  needs: {missing}")
                 continue
 
+            if result.stale_sources:
+                # Before the findings, not after. PRD B1 caps confidence at medium while
+                # anything is overdue, and a caveat printed under the answer it qualifies
+                # is read second or not at all.
+                for entry in result.stale_sources:
+                    print(f"\n{kind}: STALE — {entry['note']}")
             print(f"\n{kind}: {len(result)} finding(s)")
             for finding in result.findings:
                 marker = "now" if finding.current else "historical"
+                if finding.stale:
+                    marker += ", stale"
                 print(f"  [{finding.clause_ref or '-'}] {marker}")
                 print(f"    {finding.summary}")
                 if args.citations:

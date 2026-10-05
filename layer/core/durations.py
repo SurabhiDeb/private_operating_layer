@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
-__all__ = ["parse_duration", "format_duration"]
+__all__ = ["parse_duration", "format_duration", "approximate_duration"]
 
 _UNITS = {
     "m": "minutes",
@@ -52,9 +52,35 @@ def parse_duration(text: str) -> timedelta:
 
 
 def format_duration(window: timedelta) -> str:
-    """The shortest exact rendering, for output a human reads back."""
+    """The shortest exact rendering, for a window a human typed and will read back.
+
+    Exact on purpose: a window is policy, and `30d` shown as "about a month" would stop
+    an operator being able to check it against what they set.
+    """
     seconds = int(window.total_seconds())
     for unit, size in (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60)):
         if seconds % size == 0 and seconds >= size:
             return f"{seconds // size}{unit}"
     return f"{seconds}s"
+
+
+def approximate_duration(age: timedelta) -> str:
+    """An age, rounded down to one unit, for prose a human reads once.
+
+    An age is not policy and almost never lands on a round number, so the exact form is
+    the wrong tool: a measurement 17 days and 6 hours old came out of `format_duration`
+    as `1491958s`, which is accurate and tells a reader nothing. Found by printing a
+    finding rather than by a test, which is also why the two functions are now distinct.
+
+    Rounded down rather than to nearest, so the age is never overstated: "17d" for
+    anything from 17 days to 17 days and 23 hours.
+    """
+    seconds = int(age.total_seconds())
+    if seconds < 0:
+        # A measurement dated in the future. Reported rather than rendered as a negative
+        # age: the clocks disagree, and that is the thing worth saying.
+        return "a time in the future"
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return "under a minute"

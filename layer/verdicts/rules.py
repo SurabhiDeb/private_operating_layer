@@ -19,12 +19,20 @@ than a defect. A system that reports met or missed for everything is guessing."
 carries no passed/total, so there is no interval to bound it with. Such a clause is compared
 directly and carries a caveat, because inventing a sample size would be worse than
 admitting there is none.
+
+**An old measurement is not a passing one.** Where the caller supplies a `Staleness` and it
+is outside the source's window, `met` and `missed` degrade to `cannot_confirm` with the age
+and the source named, and `degraded_from` records what the stored number would otherwise
+have read (PRD B3 rule 12, AC-28). The window arithmetic is the caller's because it needs
+the source; the rule is here because it is part of what a verdict means.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 
+from layer.core.freshness import Staleness
 from layer.verdicts.stats import wilson
 
 MET = "met"
@@ -50,6 +58,14 @@ class Judgement:
     interval: tuple[float, float] | None = None
     #: The observation the verdict was read from, for the citation.
     observation_id: int | None = None
+    #: The `measured_at` of that observation. PRD B1's `as_of`: what a reader needs to
+    #: know how old the answer is, whether or not it is stale.
+    as_of: datetime | None = None
+    stale: bool = False
+    #: What the number would have read inside its window. Recorded so a degradation is
+    #: visible as one rather than looking like a clause that was never confident — a
+    #: fact about the stored measurement, and not a claim about the product.
+    degraded_from: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,9 @@ class Measurement:
     passed: int | None = None
     total: int | None = None
     observation_id: int | None = None
+    measured_at: datetime | None = None
+    #: Which source it came from, so the caller can find that source's window.
+    source_id: object | None = None
 
 
 def judge(
@@ -69,14 +88,22 @@ def judge(
     value: float | None,
     value_high: float | None = None,
     latest: Measurement | None = None,
+    staleness: Staleness | None = None,
 ) -> Judgement:
-    """The verdict for one clause, given its most recent measurement."""
+    """The verdict for one clause, given its most recent measurement.
+
+    `staleness` is None where there is no stated cadence, and then nothing degrades: a
+    window nobody set is not a window this clause failed to meet.
+    """
     if kind in UNMEASURABLE_KINDS or comparator is None or value is None:
         return Judgement(NOT_APPLICABLE, (
             "this clause states no numeric bar, so it is held as written and never "
             "counted as drift",
         ))
     if latest is None:
+        # Never measured and long overdue are different states and both are honest. A
+        # clause with nothing bound to it is `not_measured`, which is not a degradation
+        # of anything.
         return Judgement(NOT_MEASURED, ("no measurement is bound to this clause",))
 
     if latest.total:
@@ -89,18 +116,58 @@ def judge(
                 f"{low:.3f} to {high:.3f}, which does not sit wholly on either side of "
                 f"the bar",
             )
-        return Judgement(verdict, caveats, (low, high), latest.observation_id)
+        return _aged(
+            Judgement(verdict, caveats, (low, high), latest.observation_id), latest, staleness
+        )
 
     # No sample behind the number.
     verdict = _against_point(comparator, value, value_high, latest.value)
-    return Judgement(
-        verdict,
-        (
-            "this measurement carries no sample size, so the verdict rests on a single "
-            "point with no interval around it",
+    return _aged(
+        Judgement(
+            verdict,
+            (
+                "this measurement carries no sample size, so the verdict rests on a "
+                "single point with no interval around it",
+            ),
+            None,
+            latest.observation_id,
         ),
-        None,
-        latest.observation_id,
+        latest,
+        staleness,
+    )
+
+
+def _aged(
+    judgement: Judgement, latest: Measurement, staleness: Staleness | None
+) -> Judgement:
+    """Apply the freshness rule to a verdict that has already been computed.
+
+    Applied after rather than instead, because the Layer has to be able to say what the
+    stored number would have read. A verdict computed as `cannot_confirm` on its interval
+    stays `cannot_confirm` and simply gains the age: it was never claiming anything, so
+    there is nothing to degrade and `degraded_from` would be misleading.
+    """
+    as_of = latest.measured_at
+    if staleness is None:
+        return replace(judgement, as_of=as_of)
+    if not staleness.stale:
+        # Fresh, and said so. The age goes nowhere near the caveats: a measurement
+        # inside its window is the normal state and does not need qualifying.
+        return replace(judgement, as_of=as_of)
+    if judgement.verdict in (MET, MISSED):
+        return replace(
+            judgement,
+            verdict=CANNOT_CONFIRM,
+            caveats=(staleness.describe(),) + judgement.caveats,
+            as_of=as_of,
+            stale=True,
+            degraded_from=judgement.verdict,
+        )
+    return replace(
+        judgement,
+        caveats=judgement.caveats + (staleness.describe(),),
+        as_of=as_of,
+        stale=True,
     )
 
 

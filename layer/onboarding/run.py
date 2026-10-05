@@ -18,6 +18,7 @@ from layer.adapters.code.enforcement import EnforcementAdapter
 from layer.adapters.eval.run_files import RunFilesAdapter
 from layer.adapters.repo import RepoHandle
 from layer.adapters.spec.file_spec import SpecAdapter
+from layer.core import freshness
 from layer.db.models import Clause, Product, Source
 from layer.onboarding import persist, state
 from layer.refs.registry import Registry
@@ -86,6 +87,7 @@ def import_spec(session: Session, *, product: Product, actor: str) -> StepResult
         total.created += written.created
         total.reworded += written.reworded
         total.unchanged += written.unchanged
+        freshness.mark_synced(session, source=source)
         reports.append(report)
 
     merged = _merge(reports, "spec")
@@ -124,6 +126,9 @@ def backfill(session: Session, *, product: Product, actor: str) -> StepResult:
         cases += written.cases.inserted
         case_duplicates += written.cases.duplicates
         refused += written.cases.refusals
+        # The source delivered, whatever it carried. Finding nothing new is the pipe
+        # working, and this stamp is about the pipe (PRD B2's `last_sync_at`).
+        freshness.mark_synced(session, source=source)
         reports.append(report)
 
     merged = _merge(reports, "eval")
@@ -212,6 +217,7 @@ def scan_enforcement(session: Session, *, product: Product, actor: str) -> StepR
             session, product=product, candidates=report.candidates,
             source_id=source.id, actor=actor, report=report,
         )
+        freshness.mark_synced(session, source=source)
         reports.append(report)
 
     merged = _merge(reports, "code")

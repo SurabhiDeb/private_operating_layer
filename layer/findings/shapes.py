@@ -18,6 +18,11 @@ from numbers and timestamps, and a test greps the generated text for causal verb
 `current` separates "this is happening" from "this happened". A breach that no longer holds
 is still a finding — it is how condition 1 works, where the newest run is clean — but a
 reader must be able to tell the two apart at a glance.
+
+`as_of` and `stale` are the fourth. A finding resting on a measurement outside its source's
+window is shown with its age, never silently as current (B1, B3 rule 12), and AC-29 requires
+that age in the summary's own words rather than only in a field — so `stale` is a flag for a
+caller to branch on and never the only place the staleness appears.
 """
 
 from __future__ import annotations
@@ -48,6 +53,11 @@ class Finding:
     clause_ref: str | None = None
     first_seen: datetime | None = None
     current: bool = True
+    #: The `measured_at` of the newest observation this rests on. None where the finding
+    #: rests on no measurement at all — an unenforced clause is about CI, not about a run.
+    as_of: datetime | None = None
+    #: True where `as_of` falls outside the source's freshness window.
+    stale: bool = False
     evidence: list[str] = field(default_factory=list)
     evidence_links: list[dict] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
@@ -67,6 +77,8 @@ class Finding:
             "product": self.product,
             "first_seen": self.first_seen.isoformat() if self.first_seen else None,
             "current": self.current,
+            "as_of": self.as_of.isoformat() if self.as_of else None,
+            "stale": self.stale,
             "summary": self.summary,
             "evidence": list(self.evidence),
             "evidence_links": list(self.evidence_links),
@@ -88,6 +100,11 @@ class FindingSet:
     kind: str
     findings: list[Finding] = field(default_factory=list)
     refusal: Refusal | None = None
+    #: PRD B1's `stale_sources`: "empty is the required state. A non-empty list caps
+    #: confidence at medium and SHALL appear in `caveats` in words, not only as a field".
+    #: Attached to every set a query returns, including an empty one — a product whose
+    #: sources have all gone quiet has nothing to report and that is the thing to report.
+    stale_sources: list[dict] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.findings)
@@ -95,12 +112,19 @@ class FindingSet:
     def __iter__(self):
         return iter(self.findings)
 
+    @property
+    def stale(self) -> bool:
+        return bool(self.stale_sources)
+
     def as_dict(self) -> dict:
         if self.refusal is not None:
-            return self.refusal.as_dict() | {"kind": self.kind}
+            return self.refusal.as_dict() | {
+                "kind": self.kind, "stale_sources": list(self.stale_sources)
+            }
         return {
             "shape": "findings",
             "kind": self.kind,
             "count": len(self.findings),
             "findings": [f.as_dict() for f in self.findings],
+            "stale_sources": list(self.stale_sources),
         }
