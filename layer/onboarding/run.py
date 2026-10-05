@@ -103,6 +103,7 @@ def backfill(session: Session, *, product: Product, actor: str) -> StepResult:
     sources = state.require_source(session, product=product, role="eval")
     reports: list[ImportReport] = []
     inserted = duplicates = 0
+    cases = case_duplicates = refused = 0
 
     for source in sources:
         if source.kind in ("repo", "file", "promptfoo"):
@@ -120,13 +121,28 @@ def backfill(session: Session, *, product: Product, actor: str) -> StepResult:
         )
         inserted += written.inserted
         duplicates += written.duplicates
+        cases += written.cases.inserted
+        case_duplicates += written.cases.duplicates
+        refused += written.cases.refusals
         reports.append(report)
 
     merged = _merge(reports, "eval")
+    # The case line is stated whenever there are cases to state, because a backfill that
+    # loaded the numbers and none of the proof beneath them looks identical otherwise.
+    evidence = (
+        f", {cases} case rows stored, {case_duplicates} refused as duplicates"
+        if cases or case_duplicates
+        else ""
+    )
+    if refused:
+        # Counted together and named individually in the audit event. Each one is a case
+        # or a measurement a finding will not be able to cite, which is not something a
+        # backfill should report only as a smaller number of rows.
+        evidence += f", {refused} refusal(s) recorded"
     return StepResult(
         merged,
         f"{inserted} observations stored, {duplicates} duplicates refused, "
-        f"{merged.imported} of {merged.enumerated} documents imported",
+        f"{merged.imported} of {merged.enumerated} documents imported" + evidence,
     )
 
 

@@ -244,6 +244,81 @@ class TestMetricOutcomes:
         assert [f.reason for f in report.failed] == ["no_metric_computed"]
 
 
+class TestTheCaseLayerReachesTheCandidate:
+    """The evidence spine's first link. AC-22, AC-25, AC-26.
+
+    The engine produces the cases and the database stores them; this is the adapter in
+    between, whose only job is to carry them without recomputing anything. A second pass
+    over the rows here could only make the cases and the number disagree.
+    """
+
+    CASES = {
+        "readers": [{
+            **SIMPLE["readers"][0],
+            "cases": {"input_field": "said"},
+        }]
+    }
+    ROWS = [
+        {"id": "1", "got": "a", "want": "a", "said": "fine, thanks"},
+        {"id": "2", "got": "b", "want": "a", "said": "call me on 07700 900123"},
+    ]
+
+    @pytest.mark.ac("AC-22")
+    def test_a_candidate_carries_the_cases_behind_its_number(self):
+        report = RunFilesAdapter().read([doc("a.json", a_run(cases=self.ROWS))], SIMPLE)
+        candidate = report.candidates[0]
+
+        assert [(c.case_id, c.outcome) for c in candidate.cases] == [
+            ("1", "pass"), ("2", "fail")
+        ]
+        assert candidate.cases_reproduce_the_value
+
+    @pytest.mark.ac("AC-25")
+    def test_the_readers_case_shape_reaches_every_metric_it_computes(self):
+        """A run file's rows have one shape. Repeating `input_field` on each of a
+        source's metrics is how one of them comes to be forgotten, and a metric that
+        lost it stores no evidence text and says nothing about having done so."""
+        report = RunFilesAdapter().read([doc("a.json", a_run(cases=self.ROWS))], self.CASES)
+        stored = {c.case_id: c.input_redacted for c in report.candidates[0].cases}
+
+        assert stored == {"1": None, "2": "call me on [phone]"}
+
+    def test_a_metric_may_override_the_readers_shape(self):
+        """The shape is a property of the rows; an exception is a property of one
+        metric, such as a judge's sidecar that names its fields differently."""
+        config = json.loads(json.dumps(self.CASES))
+        config["readers"][0]["metrics"][0]["input_field"] = "nowhere"
+        report = RunFilesAdapter().read([doc("a.json", a_run(cases=self.ROWS))], config)
+
+        assert all(c.input_redacted is None for c in report.candidates[0].cases)
+
+    @pytest.mark.ac("AC-26")
+    def test_a_misspelled_case_key_is_refused_rather_than_ignored(self):
+        """The failure mode of a typo here is silence: every failing case would carry no
+        input and nothing anywhere would say why. So the set is closed."""
+        config = json.loads(json.dumps(self.CASES))
+        config["readers"][0]["cases"] = {"input_fields": "said"}
+        with pytest.raises(ValueError, match="input_fields"):
+            RunFilesAdapter().read([doc("a.json", a_run(cases=self.ROWS))], config)
+
+    def test_a_tier_one_metric_carries_no_cases_and_that_is_not_a_disagreement(self):
+        """`read` is a number the source already counted. There are no rows beneath it
+        that this Layer ever saw, which is an absence of evidence rather than evidence
+        that contradicts itself."""
+        config = {"readers": [{
+            "glob": "*.json", "run_id": "/run", "measured_at": "/at",
+            "prompt_version": None, "corpus_sha": None, "code_rev": None,
+            "metrics": [{"metric": "cases_seen", "kind": "read", "pointer": "/seen"}],
+        }]}
+        payload = a_run() | {"seen": 14}
+        report = RunFilesAdapter().read([doc("a.json", payload)], config)
+
+        assert report.candidates[0].cases == ()
+        assert report.candidates[0].cases_reproduce_the_value
+        assert report.cases == 0
+        assert report.cases_disagreeing == []
+
+
 @pytest.mark.hard_case("H5")
 def test_observations_are_keyed_by_metric_not_by_clause():
     """H5: one metric may serve two clauses. Storing an observation per clause would
@@ -365,6 +440,45 @@ class TestAgainstCommittedRuns:
         assert len(judged) == 2
         assert all(c.measured_at is not None and c.run_id for c in judged)
         assert (judged[0].passed, judged[0].total) == (29, 35)
+
+    @pytest.mark.ac("AC-22")
+    def test_every_case_row_reproduces_the_number_it_sits_under(self, handle):
+        """The load-bearing property of the whole spine, over both committed histories.
+        If `passed` and `total` could disagree with the stored outcomes, a finding would
+        cite cases that do not add up to its own claim."""
+        for glob, config in (
+            ("products/triage/runs/*.json", TRIAGE_CONFIG),
+            ("products/policydesk/runs/*.json", POLICYDESK_CONFIG),
+        ):
+            report = self._read(handle, glob, config)
+            assert report.cases_disagreeing == [], report.summary()
+            assert report.cases > 0, f"{glob} carried no case rows at all"
+
+    def test_the_report_counts_the_cases_it_carries(self, handle):
+        """506 cases across the 47 committed runs, three metrics over each of them.
+
+        Not 47 times 14: the run files hold between 1 and 20 cases each, which is worth
+        knowing here because an assertion written from the headline `cases` field in one
+        run's metadata would pass on the wrong arithmetic.
+        """
+        report = self._read(handle, "products/triage/runs/*.json", TRIAGE_CONFIG)
+        assert report.cases == 506 * 3
+        assert f"{506 * 3} case row(s)" in report.summary()
+
+    @pytest.mark.ac("AC-24")
+    def test_one_products_rows_carry_a_trace_pointer_and_the_others_do_not(self, handle):
+        """A source without tracing is `not_applicable`, never a silent zero, so the two
+        states have to be distinguishable at the point the rows are produced."""
+        triage = self._read(handle, "products/triage/runs/*.json", TRIAGE_CONFIG)
+        policy = self._read(handle, "products/policydesk/runs/*.json", POLICYDESK_CONFIG)
+
+        assert all(
+            case.trace_url is None and case.trace_id is None
+            for c in triage.candidates for case in c.cases
+        )
+        traced = [case for c in policy.candidates for case in c.cases if case.trace_url]
+        assert traced, "the policy fixture's rows carry a trace_url and none arrived"
+        assert all("/traces/" in case.trace_url for case in traced)
 
     def test_both_products_account_for_every_document(self, handle):
         for glob, config in (
@@ -531,6 +645,30 @@ class TestLangfuseSource:
 
         assert report.candidates[0].prompt_version is None
         assert report.candidates[0].corpus_sha is None
+
+    @pytest.mark.ac("AC-24")
+    def test_the_trace_pointers_langfuse_already_carries_reach_the_cases(self):
+        """The one thing this transport has that a run file does not.
+
+        Langfuse knows the trace id for every dataset item and the host and project to
+        build its URL from, so the normalisation writes both onto each row and the
+        engine's own defaults pick them up. Nothing in the measurement path knows which
+        transport it is reading, which is the design.
+        """
+        from layer.adapters.eval.langfuse import LangfuseSource
+
+        documents = LangfuseSource(_langfuse_client()).documents(LANGFUSE_CONFIG)
+        report = RunFilesAdapter().read(documents, LANGFUSE_CONFIG)
+        cases = {
+            case.case_id: case
+            for c in report.candidates if c.metric == "groundedness"
+            for case in c.cases
+        }
+
+        assert set(cases) == {"q1", "q2", "q3"}
+        assert cases["q2"].outcome == "fail"
+        assert cases["q2"].trace_id == "t2"
+        assert cases["q2"].trace_url.endswith("/project/p1/traces/t2")
 
     def test_only_named_runs_are_fetched_when_the_config_names_some(self):
         from layer.adapters.eval.langfuse import LangfuseSource

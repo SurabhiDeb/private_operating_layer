@@ -57,9 +57,14 @@ POLICYDESK_METRICS = [
 
 
 def onboard(
-    session, org, key: str, prefix: str, metrics: list[dict], *, code=None, pairs=None
+    session, org, key: str, prefix: str, metrics: list[dict], *,
+    code=None, pairs=None, cases=None, retention=None,
 ) -> Product:
     """Onboard a reference product the way its owner would.
+
+    `cases` is where the per-case layer lives in this source's rows, and `retention` is
+    how long this source keeps a trace body. Both are configuration a source's owner
+    states once, which is why they are arguments here and not conditions in the code.
 
     `pairs` is how a human pairs a measured number with a promise the source names
     differently. The policy product needs it: its specification states a bar for the critical
@@ -76,12 +81,16 @@ def onboard(
     )
     state.bind_source(
         session, product=product, role="eval", kind="repo", actor=ACTOR,
-        config={**common, "globs": [f"products/{key}/runs/*.json"], "readers": [{
+        config={**common,
+                "globs": [f"products/{key}/runs/*.json"],
+                **({"trace_retention": retention} if retention else {}),
+                "readers": [{
             "glob": f"products/{key}/runs/*.json",
             "measured_at": "/meta/timestamp_utc" if key == "triage" else "/meta/started",
             "corpus_sha": "/meta/dataset_sha" if key == "triage" else "/meta/corpus_sha",
             "prompt_version": "/meta/prompt_sha",
             "code_rev": "/meta/git_sha" if key == "triage" else "/meta/git",
+            "cases": cases or {},
             "metrics": metrics,
         }]},
     )
@@ -117,6 +126,7 @@ def triage():
     with org_session(org) as session:
         yield session, onboard(
             session, org, "triage", "TRI", TRIAGE_METRICS,
+            cases={"input_field": "message"},
             code={
                 "files": ["products/triage/gate.py", ".github/workflows/ci.yml"],
                 "metric_aliases": {
@@ -133,7 +143,26 @@ def policydesk():
     with org_session(org) as session:
         yield session, onboard(
             session, org, "policydesk", "PD", POLICYDESK_METRICS,
+            cases={"input_field": "question"},
             pairs={"critical_pass_rate": "PD-8.8"},
+        )
+
+
+@pytest.fixture
+def policydesk_past_retention():
+    """The same product, whose owner has said traces are kept for a day.
+
+    The committed runs are dated September 2026, so every pointer in them is past that
+    window. Which is the condition AC-23 is about: the body is gone at the source and
+    the finding still has to be provable.
+    """
+    org = make_org("findings-retention")
+    with org_session(org) as session:
+        yield session, onboard(
+            session, org, "policydesk", "PD", POLICYDESK_METRICS,
+            cases={"input_field": "question"},
+            pairs={"critical_pass_rate": "PD-8.8"},
+            retention="1d",
         )
 
 
@@ -141,6 +170,162 @@ def one(findings, clause_ref: str):
     matches = [f for f in findings if f.clause_ref == clause_ref]
     assert matches, f"no finding for {clause_ref}"
     return matches[0]
+
+
+# -- the proof beneath a finding --------------------------------------------------
+
+
+class TestADriftFindingCitesItsCases:
+    """AC-22, AC-23, AC-24, B3 rules 10 and 11.
+
+    "Escalation recall was missed in 7 of 47 runs, worst 80%" is not provable from a
+    per-run average, and naming the cases that are the proof is the Layer's primary job.
+    Every number below comes out of `case_result` and nothing here calls an eval
+    platform, which is the whole of AC-24.
+    """
+
+    @pytest.mark.ac("AC-22")
+    def test_the_cases_that_missed_the_bar_are_named_on_the_finding(self, triage):
+        session, product = triage
+        finding = one(queries.find_drift(session, product=product), "TRI-11.2")
+        cases = finding.detail["failing_cases"]
+
+        assert finding.detail["runs_missed"] == 7
+        assert cases, "a bar was asserted missed with no case cited (B3 rule 10)"
+        assert finding.detail["failing_cases_state"] == "cited"
+        # The one case the committed history misses, in the runs that miss it.
+        assert {c["case_id"] for c in cases} == {"14"}
+        assert all(c["outcome"] in ("fail", "error") for c in cases)
+        assert len({c["run_id"] for c in cases}) == 7
+
+    @pytest.mark.ac("AC-22")
+    def test_every_cited_case_resolves_to_somewhere_a_human_can_open(self, triage):
+        """AC-7 applies to a case ref like any other. The triage rows carry no trace, so
+        each case resolves to the run record that holds it rather than to nothing."""
+        session, product = triage
+        finding = one(queries.find_drift(session, product=product), "TRI-11.2")
+        refs = {c["ref"] for c in finding.detail["failing_cases"]}
+
+        assert refs <= set(finding.evidence)
+        assert finding.unresolved == []
+        resolved = {link["id"]: link["url"] for link in finding.evidence_links}
+        assert refs <= set(resolved)
+        assert all("/runs/" in resolved[ref] for ref in refs)
+
+    @pytest.mark.ac("AC-14")
+    def test_a_case_citation_pins_an_immutable_revision(self, triage):
+        session, product = triage
+        finding = one(queries.find_drift(session, product=product), "TRI-11.2")
+        urls = [
+            link["url"] for link in finding.evidence_links
+            if link["id"].startswith("case:")
+        ]
+        assert urls
+        assert not any("/blob/main/" in url for url in urls)
+
+    @pytest.mark.ac("AC-24")
+    def test_a_source_with_no_tracing_says_so_rather_than_reporting_false(self, triage):
+        """PRD B6: a source without tracing scores `not_applicable`, never a silent
+        zero. The two states send a reader to completely different places — one to the
+        eval platform's settings, the other to a bug in here."""
+        session, product = triage
+        finding = one(queries.find_drift(session, product=product), "TRI-11.2")
+        cases = finding.detail["failing_cases"]
+
+        assert all(c["trace_state"] == "not_applicable" for c in cases)
+        assert all(c["trace_url"] is None for c in cases)
+        assert "records no trace pointers" in finding.summary
+
+    @pytest.mark.ac("AC-24")
+    def test_a_traced_source_carries_the_pointer_onto_the_finding(self, policydesk):
+        session, product = policydesk
+        drift = queries.find_drift(session, product=product)
+        traced = [
+            case for finding in drift
+            for case in finding.detail["failing_cases"]
+            if case["trace_state"] == "available"
+        ]
+
+        assert traced, "the policy fixture's rows carry a trace_url and none reached a finding"
+        assert all(c["trace_available"] and "/traces/" in c["trace_url"] for c in traced)
+
+    @pytest.mark.ac("AC-23")
+    def test_a_deleted_trace_is_reported_gone_and_the_outcome_still_stands(
+        self, policydesk_past_retention
+    ):
+        """AC-23 and B3 rule 11. The body is past the source's retention, so the finding
+        says so, keeps the recorded outcome, and does not hand over the dead link."""
+        session, product = policydesk_past_retention
+        drift = queries.find_drift(session, product=product)
+        cases = [c for f in drift for c in f.detail["failing_cases"]]
+
+        assert cases
+        assert all(c["trace_state"] == "past_retention" for c in cases)
+        assert all(c["trace_available"] is False for c in cases)
+        assert all(c["trace_url"] is None for c in cases)
+        assert all(c["outcome"] in ("fail", "error") for c in cases)
+        assert any("no longer keeps" in f.summary for f in drift)
+
+    @pytest.mark.ac("AC-23")
+    def test_the_citation_for_a_deleted_trace_goes_to_the_run_not_the_dead_link(
+        self, policydesk_past_retention
+    ):
+        """A finding that says the body is gone while its own citation offers the link
+        would break B3 rule 11 in the space of one screen."""
+        session, product = policydesk_past_retention
+        drift = queries.find_drift(session, product=product)
+        links = [
+            link for f in drift for link in f.evidence_links
+            if link["id"].startswith("case:")
+        ]
+
+        assert links
+        assert not any("/traces/" in link["url"] for link in links)
+        assert all("/runs/" in link["url"] for link in links)
+
+    @pytest.mark.ac("AC-22")
+    def test_no_drift_finding_asserts_a_breach_without_cases_or_a_reason(
+        self, triage, policydesk
+    ):
+        """B3 rule 10, across both products and every clause rather than the one the
+        condition was written for. An empty list is allowed only where the source has no
+        per-case layer at all, and then the finding says which of the two it is."""
+        for session, product in (triage, policydesk):
+            for finding in queries.find_drift(session, product=product):
+                detail = finding.detail
+                if not detail["runs_missed"]:
+                    continue
+                state = detail["failing_cases_state"]
+                assert state in ("cited", "not_applicable", "no_failing_cases")
+                if state == "cited":
+                    assert detail["failing_cases"]
+                else:
+                    # Not silence: the summary has to say which it is and why.
+                    assert (
+                        "no per-case rows are stored" in finding.summary.lower()
+                        or "none of them is recorded as a failure" in finding.summary
+                    ), finding.summary
+
+    def test_the_cited_cases_agree_with_the_counts_the_metric_recorded(self, triage):
+        """The aggregate's own `missed_ids` and the stored cases are two paths to the
+        same fact. If they could disagree, one of them is not evidence."""
+        session, product = triage
+        finding = one(queries.find_drift(session, product=product), "TRI-11.2")
+
+        assert set(finding.detail["case_ids"]) <= {
+            c["case_id"] for c in finding.detail["failing_cases"]
+        }
+
+    def test_the_total_is_stated_even_where_the_list_is_capped(self, policydesk):
+        """The cap narrows the list and never the claim, so a reader can always tell a
+        finding citing fifty cases from one citing fifty of four hundred."""
+        session, product = policydesk
+        for finding in queries.find_drift(session, product=product):
+            cases, total = finding.detail["failing_cases"], finding.detail["failing_cases_total"]
+            assert len(cases) <= queries.MAX_FAILING_CASES
+            assert total >= len(cases)
+            if total > len(cases):
+                assert f"{total} case(s)" in finding.summary
 
 
 # -- condition 1 -----------------------------------------------------------------

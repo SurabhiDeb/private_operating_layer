@@ -20,6 +20,13 @@ for AC-2.
 **Enforcement facts are replaced per source.** What CI checks is a current fact, not a
 history: a gate that stopped checking something should leave no trace claiming it still
 does. The audit event records what changed.
+
+**Case rows are written beneath their observation, and refused if they disagree with it.**
+An aggregate cannot be evidence, so a drift finding cites cases (PRD AC-22, B3 rule 10).
+What makes them evidence is that they reproduce the number they sit under, so a candidate
+whose cases do not add up to its own `passed` and `total` has its cases refused and named
+in the audit log. Storing them would produce a finding citing proof that contradicts its
+own claim, which is worse than a finding citing none.
 """
 
 from __future__ import annotations
@@ -38,8 +45,14 @@ from layer.adapters.base import (
     ObservationCandidate,
 )
 from layer.core import audit
-from layer.db.models import Clause, EnforcementFact, Observation, Product
+from layer.db.models import CaseResult, Clause, EnforcementFact, Observation, Product
+from layer.metrics.engine import ERROR, FAIL
 from layer.onboarding.identity import NEW, REWORDED, UNCHANGED, resolve, statement_hash
+
+#: `case_result.case_id` is varchar(128). A longer id is refused and named rather than
+#: truncated: a truncated id is a different id, and two cases that truncate to the same
+#: string would silently become one piece of evidence.
+MAX_CASE_ID = 128
 
 
 @dataclass
@@ -54,9 +67,63 @@ class ClauseWrite:
 
 
 @dataclass
+class CaseWrite:
+    """What the evidence spine took, and everything it would not take.
+
+    Every refusal is a list of names rather than a count, because each one is a case a
+    finding will not be able to cite and the reason has to be readable without a query.
+    """
+
+    inserted: int = 0
+    duplicates: int = 0
+    measurements: int = 0
+    unmatched: list[str] = field(default_factory=list)
+    disagreeing: list[str] = field(default_factory=list)
+    duplicate_ids: list[str] = field(default_factory=list)
+    oversized_ids: list[str] = field(default_factory=list)
+    inputs: int = 0
+    pointers: int = 0
+
+    @property
+    def offered(self) -> int:
+        return self.inserted + self.duplicates
+
+    @property
+    def refusals(self) -> int:
+        """Everything this write would not take, whatever the reason.
+
+        Two units in one number: a measurement whose whole case set was refused, and an
+        individual case. They are summed only to decide whether the backfill says
+        anything at all — each is named separately in the audit event, because a count
+        alone cannot be acted on.
+        """
+        return (
+            len(self.disagreeing)
+            + len(self.unmatched)
+            + len(self.duplicate_ids)
+            + len(self.oversized_ids)
+        )
+
+    @property
+    def trace_coverage(self) -> str:
+        """PRD B6's pointer-coverage line, in words rather than as a bare ratio.
+
+        A source that records no trace at all scores `not_applicable`, never a silent
+        zero: zero would read as a Layer that lost the pointers, and the two states lead
+        a reader to completely different places.
+        """
+        if self.offered == 0:
+            return "no_cases"
+        if self.pointers == 0:
+            return "not_applicable"
+        return f"{self.pointers} of {self.offered}"
+
+
+@dataclass
 class ObservationWrite:
     inserted: int = 0
     duplicates: int = 0
+    cases: CaseWrite = field(default_factory=CaseWrite)
 
     @property
     def offered(self) -> int:
@@ -217,10 +284,25 @@ def write_observations(
     result.inserted = inserted
     result.duplicates = len(rows) - inserted
 
+    # After the observations exist, never before: a case row points at one by id, and
+    # the id is the database's to issue.
+    result.cases = write_cases(session, product=product, candidates=candidates)
+
     detail = {
         "inserted": result.inserted,
         "duplicates_refused": result.duplicates,
         "metrics": sorted({c.metric for c in candidates}),
+        "cases": {
+            "inserted": result.cases.inserted,
+            "duplicates_refused": result.cases.duplicates,
+            "measurements_with_cases": result.cases.measurements,
+            "inputs_stored": result.cases.inputs,
+            "trace_pointer_coverage": result.cases.trace_coverage,
+            "refused_disagreeing": result.cases.disagreeing,
+            "refused_unmatched": result.cases.unmatched,
+            "refused_duplicate_ids": result.cases.duplicate_ids,
+            "refused_oversized_ids": result.cases.oversized_ids,
+        },
     }
     if report is not None:
         detail |= {
@@ -241,6 +323,133 @@ def write_observations(
     if report is not None:
         _record_if_incomplete(session, product, report, actor, "eval")
     return result
+
+
+def write_cases(
+    session: Session,
+    *,
+    product: Product,
+    candidates: list[ObservationCandidate],
+) -> CaseWrite:
+    """Write the per-case layer beneath observations that already exist.
+
+    **Keyed through the observation's own idempotency key, not through the insert.** The
+    upsert above returns only the rows it created, and on a repeated backfill that is
+    none of them — so a lookup is the only thing that can attach cases to an observation
+    stored before this step existed. It also makes a second run free: the case rows
+    collide on the primary key and are refused, exactly as the observations are.
+
+    **`measured_at` is the observation's, never the clock's.** It is part of the primary
+    key because it is the partition key, so reading the time here instead would write a
+    second copy of every case on every backfill (PRD AC-27).
+
+    No audit event of its own: these rows are part of the observation write and are
+    recorded in its detail, so one backfill leaves one event rather than two that can
+    disagree.
+    """
+    result = CaseWrite()
+    with_cases = [c for c in candidates if c.cases]
+    if not with_cases:
+        return result
+
+    storable: list[ObservationCandidate] = []
+    for candidate in with_cases:
+        if candidate.cases_reproduce_the_value:
+            storable.append(candidate)
+        else:
+            # Refused, not stored and not silently dropped. Cases that do not add up to
+            # their own aggregate are not evidence of it.
+            result.disagreeing.append(candidate.case_key)
+    if not storable:
+        return result
+
+    ids = _observation_ids(session, product, storable)
+    rows: list[dict] = []
+    for candidate in storable:
+        observation_id = ids.get(_idempotency_key(candidate))
+        if observation_id is None:
+            # The observation is absent, so there is nothing for these cases to hang
+            # beneath. Named rather than counted, because a case with no observation is
+            # a hole in the evidence for one specific measurement.
+            result.unmatched.append(candidate.case_key)
+            continue
+        result.measurements += 1
+        seen: set[str] = set()
+        for case in candidate.cases:
+            if len(case.case_id) > MAX_CASE_ID:
+                result.oversized_ids.append(f"{candidate.case_key}/{case.case_id[:32]}…")
+                continue
+            if case.case_id in seen:
+                # Two rows in one run sharing an id cannot be addressed individually, so
+                # the second is refused and named rather than overwriting the first.
+                result.duplicate_ids.append(f"{candidate.case_key}/{case.case_id}")
+                continue
+            seen.add(case.case_id)
+            if case.input_redacted is not None:
+                result.inputs += 1
+            if case.trace_id or case.trace_url:
+                result.pointers += 1
+            rows.append({
+                "org_id": product.org_id,
+                "observation_id": observation_id,
+                "case_id": case.case_id,
+                "measured_at": candidate.measured_at,
+                "outcome": case.outcome,
+                # The CHECK enforces this too. Belt and braces on the one rule here
+                # that is a privacy guarantee rather than a convention (AC-26).
+                "input_redacted": (
+                    case.input_redacted if case.outcome in (FAIL, ERROR) else None
+                ),
+                "trace_id": case.trace_id,
+                "trace_url": case.trace_url,
+            })
+
+    if not rows:
+        return result
+
+    inserted = 0
+    for chunk in _chunks(rows, 1000):
+        statement = (
+            insert(CaseResult)
+            .values(chunk)
+            # No constraint named. The primary key of a partitioned table is the arbiter
+            # and inference by name across partitions is not worth relying on, where an
+            # untargeted DO NOTHING is exact about what it means: this row already exists.
+            .on_conflict_do_nothing()
+            .returning(CaseResult.case_id)
+        )
+        inserted += len(list(session.execute(statement).scalars()))
+    result.inserted = inserted
+    result.duplicates = len(rows) - inserted
+    return result
+
+
+def _idempotency_key(candidate: ObservationCandidate) -> tuple:
+    """`uq_observation_idempotent` minus the columns that are fixed per call."""
+    return (candidate.clause_ref, candidate.metric, candidate.run_url)
+
+
+def _observation_ids(
+    session: Session, product: Product, candidates: list[ObservationCandidate]
+) -> dict[tuple, int]:
+    metrics = {c.metric for c in candidates}
+    rows = session.execute(
+        select(
+            Observation.id,
+            Observation.clause_ref,
+            Observation.metric,
+            Observation.run_url,
+        ).where(
+            Observation.product_id == product.id,
+            Observation.metric.in_(metrics),
+        )
+    ).all()
+    return {(clause_ref, metric, run_url): id_ for id_, clause_ref, metric, run_url in rows}
+
+
+def _chunks(rows: list[dict], size: int):
+    for start in range(0, len(rows), size):
+        yield rows[start:start + size]
 
 
 def write_enforcement(

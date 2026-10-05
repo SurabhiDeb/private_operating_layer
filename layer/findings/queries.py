@@ -15,6 +15,12 @@ true, and collapsing them would lose one of them.
 **No summary states a cause.** B3 rule 6: "X first failed at v3 and the prompt sha changed at
 v3" is permitted, "the prompt change caused it" is forbidden. Every sentence below is built
 from counts, values and timestamps.
+
+**A drift finding cites the cases that missed the bar.** B3 rule 10: an empty
+`failing_cases` beside `runs_missed > 0` "is a defect, not a terse answer". It can also be
+an honest answer — a source that reports a metric as a single number has no per-case layer
+for the Layer to have stored — so the two are distinguished by name in
+`failing_cases_state` rather than by an empty list that could mean either.
 """
 
 from __future__ import annotations
@@ -27,7 +33,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from layer.core.errors import Refusal
-from layer.db.models import Binding, Clause, EnforcementFact, Observation, Product
+from layer.db.models import (
+    Binding,
+    CaseResult,
+    Clause,
+    EnforcementFact,
+    Observation,
+    Product,
+    Source,
+)
+from layer.metrics.engine import ERROR, FAIL
+from layer.findings import traces
 from layer.findings.shapes import (
     DRIFT,
     METRIC_WITHOUT_CLAUSE,
@@ -46,6 +62,29 @@ from layer.onboarding import bindings as binding_gate
 #: A bound clause whose newest measurement is older than this is reported as stale rather
 #: than as passing. A number that stopped being taken is not evidence that nothing changed.
 STALE_AFTER = timedelta(days=30)
+
+#: How many individual cases a drift finding carries. A cap, because a finding is read by a
+#: human and fifty cases is already more than anyone reviews in one sitting — and
+#: `failing_cases_total` always states the real number, so the cap narrows the list and
+#: never the claim.
+MAX_FAILING_CASES = 50
+
+#: `failing_cases_state`, which says what an empty list means.
+CITED = "cited"
+#: The source reports this metric as a number and records no per-case rows beneath it, so
+#: there is nothing the Layer could have stored. AC-24's `not_applicable`.
+NOT_APPLICABLE = "not_applicable"
+#: Per-case rows are stored beneath these runs and none of them records a failure. Stated
+#: rather than left as an empty list, which would read as B3 rule 10's defect and hide the
+#: one thing a reader needs: that the proof exists and does not contain what was expected.
+NO_FAILING_CASES = "no_failing_cases"
+
+#: Trace states, from `layer.findings.traces`, which is also what the `case` resolver
+#: reads: a finding saying the body is gone while its own citation hands over the dead
+#: link would be B3 rule 11 broken in the space of one screen.
+TRACE_AVAILABLE = traces.AVAILABLE
+TRACE_PAST_RETENTION = traces.PAST_RETENTION
+TRACE_NOT_APPLICABLE = traces.NOT_APPLICABLE
 
 
 @dataclass(frozen=True)
@@ -79,6 +118,7 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
         latest = rows[-1]
         first = breaching[0]
         current = _violates(bar.clause, latest.value)
+        cases, cases_total, cases_state = _failing_cases(session, product, breaching)
 
         out.append(Finding(
             kind=DRIFT,
@@ -86,10 +126,15 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
             clause_ref=bar.clause.ref,
             first_seen=first.measured_at,
             current=current,
-            summary=_drift_summary(bar, rows, breaching, worst, latest, current),
+            summary=_drift_summary(
+                bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state
+            ),
             evidence=(
                 [f"clause:{bar.clause.ref}"]
                 + [f"obs:{r.id}" for r in breaching[:12]]
+                # The cases are evidence in their own right, not a decoration on the
+                # runs: B3 rule 10 is that a bar is never asserted missed without them.
+                + [c["ref"] for c in cases]
             ),
             detail={
                 "metric": bar.metric,
@@ -103,6 +148,9 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
                 "latest_verdict": bar.clause.verdict,
                 "first_breaching_run": first.run_id,
                 "case_ids": _case_ids(breaching),
+                "failing_cases": cases,
+                "failing_cases_total": cases_total,
+                "failing_cases_state": cases_state,
                 "breach_revisions": sorted({r.code_rev for r in breaching if r.code_rev}),
                 "clean_revisions": sorted(
                     {r.code_rev for r in rows if r.code_rev}
@@ -113,7 +161,9 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
     return _resolved(session, product, DRIFT, out, registry)
 
 
-def _drift_summary(bar, rows, breaching, worst, latest, current) -> str:
+def _drift_summary(
+    bar, rows, breaching, worst, latest, current, cases, cases_total, cases_state
+) -> str:
     parts = [
         f"{bar.clause.ref} {bar.clause.label or bar.metric} {_bar_text(bar.clause)} "
         f"was missed in {len(breaching)} of {len(rows)} runs, "
@@ -135,9 +185,7 @@ def _drift_summary(bar, rows, breaching, worst, latest, current) -> str:
             f"The latest run, {latest.run_id or 'the most recent'}, is at "
             f"{_value_text(bar.clause, latest.value)} and still misses the bar."
         )
-    cases = _case_ids(breaching)
-    if cases:
-        parts.append(f"Failing case ids across these runs: {', '.join(cases[:10])}.")
+    parts.append(_cases_sentence(cases, cases_total, cases_state))
 
     breach_revs = sorted({r.code_rev for r in breaching if r.code_rev})
     clean_revs = sorted({r.code_rev for r in rows if r.code_rev} - set(breach_revs))
@@ -148,6 +196,123 @@ def _drift_summary(bar, rows, breaching, worst, latest, current) -> str:
         if clean_revs:
             parts.append(f"Runs at {', '.join(clean_revs[:4])} do not breach.")
     return " ".join(parts)
+
+
+def _failing_cases(
+    session: Session, product: Product, breaching: list[Observation]
+) -> tuple[list[dict], int, str]:
+    """The individual cases beneath the runs that missed the bar. **This is the proof.**
+
+    PRD AC-22 and B3 rule 10: a finding that asserts a bar was missed cites the cases
+    that missed it, and an empty list beside `runs_missed > 0` is a defect rather than a
+    terse answer. It is read from `case_result` and never from the eval platform, which
+    is AC-24's whole point — the proof outlives the source's retention window.
+
+    **The cases are the ones the metric recorded as `fail` or `error`, which is a
+    statement about the metric and not about the bar.** For a floor — accuracy at least
+    85% — those are the same rows. For a cap expressed over a per-case predicate they
+    would not be, so the summary says "recorded as failing" rather than "caused the
+    breach", and no sentence anywhere claims one produced the other (B3 rule 6).
+    """
+    if not breaching:
+        return [], 0, NOT_APPLICABLE
+
+    ids = [row.id for row in breaching]
+    rows = session.execute(
+        select(
+            CaseResult.observation_id,
+            CaseResult.case_id,
+            CaseResult.outcome,
+            CaseResult.trace_id,
+            CaseResult.trace_url,
+            CaseResult.measured_at,
+            Observation.run_id,
+            Observation.run_url,
+            Observation.source_id,
+        )
+        .join(Observation, Observation.id == CaseResult.observation_id)
+        .where(
+            CaseResult.observation_id.in_(ids),
+            CaseResult.outcome.in_((FAIL, ERROR)),
+        )
+        # Oldest first, matching `first_seen`: a reader following a degradation wants the
+        # earliest proof of it, not an arbitrary slice of the newest.
+        .order_by(CaseResult.measured_at, CaseResult.case_id)
+    ).all()
+
+    if not rows:
+        stored = session.execute(
+            select(func.count())
+            .select_from(CaseResult)
+            .where(CaseResult.observation_id.in_(ids))
+        ).scalar_one()
+        return [], 0, NO_FAILING_CASES if stored else NOT_APPLICABLE
+
+    retention = traces.retention_for(session, product.id)
+    now = _now(session) if retention else None
+
+    cases = []
+    for row in rows[:MAX_FAILING_CASES]:
+        state = traces.state_of(
+            trace_id=row.trace_id, trace_url=row.trace_url,
+            measured_at=row.measured_at,
+            retention=retention.get(row.source_id), now=now,
+        )
+        cases.append({
+            "ref": f"case:{row.observation_id}/{row.case_id}",
+            "case_id": row.case_id,
+            "outcome": row.outcome,
+            "run_id": row.run_id,
+            "run_url": row.run_url,
+            "trace_url": row.trace_url if state == TRACE_AVAILABLE else None,
+            "trace_available": state == TRACE_AVAILABLE,
+            "trace_state": state,
+        })
+    return cases, len(rows), CITED
+
+
+def _cases_sentence(cases: list[dict], total: int, state: str) -> str:
+    """One sentence about the proof, including when there is none and why.
+
+    B3 rule 10 makes the absence of cases a reportable condition rather than a quiet
+    omission, so every state gets a sentence and none of them is silence.
+    """
+    if state == NOT_APPLICABLE:
+        return (
+            "No per-case rows are stored beneath these runs: this source reports the "
+            "metric as a number and records no cases, so the runs are the finest "
+            "evidence available."
+        )
+    if state == NO_FAILING_CASES:
+        return (
+            "Per-case rows are stored beneath these runs and none of them is recorded "
+            "as a failure, so the number and the cases beneath it should be read "
+            "together before this is acted on."
+        )
+    # Distinct ids, because the same case failing in seven runs is one case a human
+    # goes and looks at, and a list reading "14, 14, 14, 14, 14, 14, 14" says less than
+    # the count already did.
+    ids: list[str] = []
+    for case in cases:
+        if case["case_id"] not in ids:
+            ids.append(case["case_id"])
+    sentence = (
+        f"{total} case(s) across these runs are recorded as failing"
+        + (f", {len(cases)} of them cited here" if len(cases) < total else "")
+        + f". Case ids: {', '.join(ids[:10])}"
+        + ("…" if len(ids) > 10 else "")
+        + "."
+    )
+    without = sum(1 for c in cases if c["trace_state"] == TRACE_NOT_APPLICABLE)
+    gone = sum(1 for c in cases if c["trace_state"] == TRACE_PAST_RETENTION)
+    if gone:
+        sentence += (
+            f" {gone} of the cited cases point at a trace the source no longer keeps; "
+            f"the recorded outcome is shown instead of a dead link."
+        )
+    if without == len(cases) and cases:
+        sentence += " This source records no trace pointers, so each case cites its run."
+    return sentence
 
 
 # -- unenforced ------------------------------------------------------------------
@@ -531,6 +696,11 @@ def _value_text(clause: Clause, value: float) -> str:
     if clause.unit in ("duration_s", "duration_ms", "currency", "count", "tokens"):
         return _plain(value)
     return _plain(value)
+
+
+def _now(session: Session):
+    """The database's clock, not the process's. Every other timestamp here came from it."""
+    return session.execute(select(func.now())).scalar_one()
 
 
 def _plain(value: float | None) -> str:

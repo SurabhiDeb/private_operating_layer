@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -39,6 +39,24 @@ from layer.adapters.base import (
 )
 from layer.metrics import MetricValue, Unmeasurable, compute
 from layer.metrics.pointer import MISSING, resolve
+
+
+#: The keys that say where a case's identity, its input and its trace pointer live in a
+#: row. A reader may set them once for all its metrics; a metric definition may override
+#: any of them. Mechanism lives in the engine, shape lives here (agnosticism rule R2).
+#:
+#: The set is closed and an unknown key is refused rather than ignored, because the
+#: failure mode of a typo is silent: `input_fields` instead of `input_field` would leave
+#: every failing case with no input and the finding with nothing to show, and nothing
+#: anywhere would say why.
+CASE_FIELDS = frozenset({
+    "id_field",
+    "input_field",
+    "trace_id_field",
+    "trace_url_field",
+    "error_field",
+    "redact_patterns",
+})
 
 
 @dataclass(frozen=True)
@@ -62,6 +80,10 @@ class Reader:
     join_on: str | None = None
     #: Pointers that must resolve for the document to be a run of this kind at all.
     requires: tuple[str, ...] = ()
+    #: Where the per-case layer lives in a row, for every metric this reader computes.
+    #: See `CASE_FIELDS`. A run file's rows have one shape, and repeating `input_field`
+    #: on each of a source's metrics is how one of them comes to be forgotten.
+    cases: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: dict) -> Reader:
@@ -76,11 +98,36 @@ class Reader:
             trace_url=raw.get("trace_url"),
             join_on=raw.get("join_on"),
             requires=tuple(raw.get("requires", ())),
+            cases=_case_fields(raw.get("cases") or {}),
         )
 
     @property
     def is_sidecar(self) -> bool:
         return self.join_on is not None
+
+    def definition(self, metric: dict) -> dict:
+        """One metric definition with this reader's case shape beneath it.
+
+        The reader's keys are defaults and the definition wins, because the shape is a
+        property of the rows while an exception is a property of one metric — a judge's
+        sidecar that names its rows differently, say.
+        """
+        if not self.cases:
+            return metric
+        return {**self.cases, **metric}
+
+
+def _case_fields(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("a reader's 'cases' must be an object of field names")
+    unknown = sorted(set(raw) - CASE_FIELDS)
+    if unknown:
+        raise ValueError(
+            f"a reader's 'cases' does not take {', '.join(unknown)}. "
+            f"It takes: {', '.join(sorted(CASE_FIELDS))}. A key that was ignored here "
+            f"would leave every failing case with no evidence and say nothing about it."
+        )
+    return dict(raw)
 
 
 @dataclass
@@ -229,7 +276,8 @@ class RunFilesAdapter:
                 url = str(from_doc)
 
         produced = 0
-        for definition in reader.metrics:
+        for metric in reader.metrics:
+            definition = reader.definition(metric)
             result = compute(parsed, definition)
             if isinstance(result, Unmeasurable):
                 report.unmeasured.append(
@@ -285,6 +333,10 @@ class RunFilesAdapter:
             run_id=provenance.run_id,
             run_url=url,
             detail=value.detail,
+            # The per-case layer, carried as the engine produced it. Nothing is
+            # recomputed here: the cases and the number are one measurement, and a
+            # second pass over the rows could only make them disagree.
+            cases=value.cases,
         )
 
     # -- helpers ------------------------------------------------------------------
@@ -325,6 +377,13 @@ class RunFilesAdapter:
             return None
 
     def _summarise(self, report: ImportReport) -> None:
+        disagreeing = report.cases_disagreeing
+        if disagreeing:
+            report.notes.append(
+                f"{len(disagreeing)} measurement(s) carry cases that do not reproduce "
+                f"their own passed/total and will not be stored as evidence: "
+                + ", ".join(disagreeing[:5])
+            )
         if report.failed:
             report.notes.append(
                 f"{len(report.failed)} document(s) did not import: "

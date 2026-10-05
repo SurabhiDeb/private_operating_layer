@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from layer.metrics.engine import PASS, CaseOutcome
+
 
 @dataclass(frozen=True)
 class SourceDocument:
@@ -90,6 +92,31 @@ class ImportReport:
     def partial(self) -> bool:
         return bool(self.failed)
 
+    @property
+    def cases(self) -> int:
+        """Case rows carried by the candidates, which is what the evidence spine stores.
+
+        Deliberately outside `accounted`, like `unmeasured` and for the same reason: the
+        unit of enumeration is a document, and cases are a layer beneath a candidate
+        rather than a second kind of enumerated thing. Counted so a backfill can say how
+        much proof it loaded instead of only how many numbers.
+        """
+        return sum(len(c.cases) for c in self.candidates if hasattr(c, "cases"))
+
+    @property
+    def cases_disagreeing(self) -> list[str]:
+        """Candidates whose cases do not reproduce their own `passed` and `total`.
+
+        An empty list is the required state. A non-empty one is a defect in whichever
+        adapter produced it and is reported in `summary()` rather than being left to
+        surface later as a finding citing evidence that does not add up.
+        """
+        return [
+            c.case_key
+            for c in self.candidates
+            if hasattr(c, "cases_reproduce_the_value") and not c.cases_reproduce_the_value
+        ]
+
     def summary(self) -> str:
         parts = [
             f"{len(self.candidates)} candidate(s) from {self.imported} imported",
@@ -98,6 +125,17 @@ class ImportReport:
             f"of {self.enumerated} enumerated",
         ]
         line = ", ".join(parts)
+        if self.cases:
+            line += f", {self.cases} case row(s)"
+        disagreeing = self.cases_disagreeing
+        if disagreeing:
+            # Loud for the same reason as an unbalanced report. Cases that do not
+            # reproduce their aggregate are not evidence, so they are named here and
+            # refused at the write rather than stored and cited.
+            line += (
+                f"  [CASES DISAGREE with their own passed/total: "
+                f"{', '.join(disagreeing[:5])}. Not stored.]"
+            )
         if not self.complete:
             # Loud on purpose. An unbalanced report means something was dropped on the
             # floor, which is the one outcome EC-4 forbids outright.
@@ -154,6 +192,39 @@ class ObservationCandidate:
     run_id: str | None = None
     run_url: str | None = None
     detail: dict = field(default_factory=dict)
+    #: The per-case layer beneath this number, where the aggregation has one. Empty is a
+    #: correct and common state: a tier 1 metric is a number the source already counted,
+    #: with no rows behind it that this Layer ever saw.
+    cases: tuple[CaseOutcome, ...] = ()
+
+    @property
+    def counted_cases(self) -> tuple[CaseOutcome, ...]:
+        """The cases inside the metric's denominator. See `CaseOutcome.counted`."""
+        return tuple(case for case in self.cases if case.counted)
+
+    @property
+    def cases_reproduce_the_value(self) -> bool:
+        """Whether the cases add up to the number they are the evidence for.
+
+        The load-bearing property of the whole evidence spine. If `passed` and `total`
+        could disagree with the stored outcomes, a finding would cite cases that do not
+        add up to its own claim, which is worse than citing none — so this is checked
+        before the rows are written and a disagreement is reported rather than stored.
+
+        Vacuously true with no cases. A tier 1 metric has no per-case layer, and that is
+        an absence of evidence, not a disagreement.
+        """
+        if not self.cases:
+            return True
+        if self.passed is None or self.total is None:
+            return False
+        passes = sum(1 for case in self.counted_cases if case.outcome == PASS)
+        return passes == self.passed and len(self.counted_cases) == self.total
+
+    @property
+    def case_key(self) -> str:
+        """How a candidate is named in a report, for a human reading the arithmetic."""
+        return f"{self.metric}@{self.run_id or self.run_url or 'unknown run'}"
 
 
 @dataclass(frozen=True)

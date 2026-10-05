@@ -36,6 +36,19 @@ class TestParsing:
         with pytest.raises((MalformedRef, ValueError)):
             parse(raw)
 
+    def test_a_case_ref_names_its_observation_and_the_case_within_it(self):
+        """`case_result` has no surrogate id: a primary key on a partitioned table must
+        contain the partition keys, so the composite key is the identity and a case is
+        cited path-shaped, like every other identifier here."""
+        ref = parse("case:102/14")
+        assert (ref.kind, ref.id) == ("case", "102/14")
+
+    def test_a_positional_case_id_is_citable(self):
+        """A row the source names no id for is referenced by position and marked with
+        `#`. Dropping the row instead would break the counts drift detection reads, so
+        the ref has to survive the shape."""
+        assert parse("case:102/#3").id == "102/#3"
+
     def test_refs_are_values(self):
         assert Ref("obs", "102") == Ref("obs", "102")
         assert len({Ref("obs", "102"), Ref("obs", "102")}) == 1

@@ -14,6 +14,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,9 +22,18 @@ from sqlalchemy import func, select
 
 from layer.core.db import org_session
 from layer.core.errors import NotLive, UnknownProduct
-from layer.db.models import AuditEvent, Binding, Clause, Observation, Product
+from layer.db.models import (
+    AuditEvent,
+    Binding,
+    CaseResult,
+    Clause,
+    Observation,
+    Product,
+)
+from layer.adapters.base import ObservationCandidate
+from layer.metrics.engine import CaseOutcome
 from layer.onboarding import bindings as binding_gate
-from layer.onboarding import run, state
+from layer.onboarding import persist, run, state
 
 from conftest import make_org
 
@@ -683,6 +693,315 @@ def test_a_reference_product_reaches_live_and_its_history_is_not_double_counted(
         # cannot_confirm dominating is the honest state, not a defect (PRD B2).
         assert counts.get("cannot_confirm", 0) >= 1
         assert sum(counts.values()) == state.status(session, product=product).clauses
+
+
+# -- the evidence spine, at the database ------------------------------------------
+
+
+TRIAGE_WITH_CASES = {
+    "globs": ["products/triage/runs/*.json"],
+    "readers": [{
+        "glob": "products/triage/runs/*.json",
+        "measured_at": "/meta/timestamp_utc", "corpus_sha": "/meta/dataset_sha",
+        "prompt_version": "/meta/prompt_sha",
+        # The case shape, stated once for every metric this reader computes. The rows
+        # carry no trace at all, which is `not_applicable` and not a missing value.
+        "cases": {"input_field": "message"},
+        "metrics": [
+            {"metric": "team_accuracy", "kind": "accuracy",
+             "actual": "team", "expected": "labelled_team"},
+            {"metric": "escalation_recall", "kind": "recall",
+             "actual": "escalate", "expected": "labelled_escalate",
+             "coerce": {"labelled_escalate": "bool"}},
+        ],
+    }],
+}
+
+
+@pytest.mark.skipif(not REFERENCE.exists(), reason="reference products not present")
+class TestTheEvidenceSpineIsStored:
+    """AC-22, AC-26, AC-27. The rows a drift finding will cite.
+
+    The engine produces the cases and the adapter carries them; this is where they
+    become evidence. Everything here is counted against the committed run files: 47
+    runs holding 506 cases between them, between 1 and 20 each. Not 47 times the 14 a
+    run's own metadata reports, which is the arithmetic a reader checking this by hand
+    would reach for first and is wrong.
+    """
+
+    COMMON = {
+        "local_path": str(REFERENCE),
+        "repo_url": "https://github.com/SurabhiDeb/chatbot-lab",
+    }
+
+    @pytest.fixture
+    def backfilled(self):
+        org = make_org("spine")
+        with org_session(org) as session:
+            product = state.register(
+                session, org_id=org, key="triage", name="Triage",
+                ref_prefix="TRI", actor=ACTOR,
+            )
+            state.bind_source(
+                session, product=product, role="spec", kind="repo", actor=ACTOR,
+                config={**self.COMMON, "path": "products/triage/SPEC.md"},
+            )
+            state.bind_source(
+                session, product=product, role="eval", kind="repo", actor=ACTOR,
+                config={**self.COMMON, **TRIAGE_WITH_CASES},
+            )
+            run.import_spec(session, product=product, actor=ACTOR)
+            yield session, product, run.backfill(session, product=product, actor=ACTOR)
+
+    @pytest.mark.ac("AC-26")
+    def test_every_case_in_every_run_gets_a_row(self, backfilled):
+        """Not only the failures. The counts are what drift detection reads, so a table
+        of failures alone would make every rate unrecomputable from this table."""
+        session, product, result = backfilled
+        stored = session.execute(
+            select(func.count()).select_from(CaseResult)
+            .join(Observation, Observation.id == CaseResult.observation_id)
+            .where(Observation.product_id == product.id)
+        ).scalar_one()
+
+        assert stored == 506 * 2
+        assert f"{506 * 2} case rows stored" in result.detail
+
+    @pytest.mark.ac("AC-22")
+    def test_the_stored_cases_reproduce_the_number_they_sit_under(self, backfilled):
+        """The property that makes them evidence rather than decoration, asserted over
+        every stored observation rather than a sampled one."""
+        session, product, _ = backfilled
+        rows = session.execute(
+            select(
+                Observation.id, Observation.passed, Observation.total,
+                func.count().filter(CaseResult.outcome == "pass"),
+                func.count().filter(CaseResult.outcome != "skipped"),
+            )
+            .join(CaseResult, CaseResult.observation_id == Observation.id)
+            .where(Observation.product_id == product.id)
+            .group_by(Observation.id, Observation.passed, Observation.total)
+        ).all()
+
+        assert len(rows) == 47 * 2
+        disagreeing = [
+            r for r in rows if (r[1], r[2]) != (r[3], r[4])
+        ]
+        assert disagreeing == [], "stored cases do not add up to their own observation"
+
+    @pytest.mark.ac("AC-27")
+    def test_a_case_carries_its_observations_time_and_not_the_clock(self, backfilled):
+        """`measured_at` is in the primary key because it is the partition key. Reading
+        the clock here instead would write a second copy of every case on every
+        backfill, and one run has one time."""
+        session, product, _ = backfilled
+        mismatched = session.execute(
+            select(func.count())
+            .select_from(CaseResult)
+            .join(Observation, Observation.id == CaseResult.observation_id)
+            .where(
+                Observation.product_id == product.id,
+                CaseResult.measured_at != Observation.measured_at,
+            )
+        ).scalar_one()
+        assert mismatched == 0
+
+    @pytest.mark.ac("AC-2")
+    def test_a_second_backfill_stores_no_cases_either(self, backfilled):
+        session, product, _ = backfilled
+        again = run.backfill(session, product=product, actor=ACTOR)
+
+        assert "0 case rows stored" in again.detail
+        assert f"{506 * 2} refused as duplicates" in again.detail
+
+    @pytest.mark.ac("AC-26")
+    def test_an_input_is_stored_for_a_failing_case_and_for_no_other(self, backfilled):
+        """The half of AC-26 the CHECK cannot carry: non-null on a failing row, where
+        the source carries an input at all. This source does."""
+        session, product, _ = backfilled
+        rows = session.execute(
+            select(CaseResult.outcome, CaseResult.input_redacted)
+            .join(Observation, Observation.id == CaseResult.observation_id)
+            .where(Observation.product_id == product.id)
+        ).all()
+
+        failures = [r for r in rows if r[0] in ("fail", "error")]
+        assert failures, "no failing case was stored, so AC-26 proves nothing here"
+        assert all(r[1] for r in failures), "a failing case stored no input"
+        assert all(r[1] is None for r in rows if r[0] not in ("fail", "error"))
+
+    @pytest.mark.ac("AC-26")
+    def test_one_case_is_a_failure_under_one_metric_and_skipped_by_another(self, backfilled):
+        """AC-26 asks for this explicitly, and it is the clearest statement of what an
+        outcome is: a property of the metric, not of the row. The same case in the same
+        run is a failure of one metric and outside what the other measures."""
+        session, product, _ = backfilled
+        rows = session.execute(
+            select(
+                Observation.run_id, CaseResult.case_id,
+                Observation.metric, CaseResult.outcome,
+            )
+            .join(CaseResult, CaseResult.observation_id == Observation.id)
+            .where(Observation.product_id == product.id)
+        ).all()
+
+        by_case: dict[tuple, dict] = {}
+        for run_id, case_id, metric, outcome in rows:
+            by_case.setdefault((run_id, case_id), {})[metric] = outcome
+
+        both = [
+            key for key, outcomes in by_case.items()
+            if "fail" in outcomes.values() and "skipped" in outcomes.values()
+        ]
+        assert both, (
+            "no case is a failure under one metric and skipped by another, so the "
+            "distinction is not proven against real data"
+        )
+
+    @pytest.mark.ac("AC-24")
+    def test_a_source_with_no_tracing_stores_no_pointer_rather_than_a_dead_one(
+        self, backfilled
+    ):
+        session, product, _ = backfilled
+        pointers = session.execute(
+            select(func.count())
+            .select_from(CaseResult)
+            .join(Observation, Observation.id == CaseResult.observation_id)
+            .where(
+                Observation.product_id == product.id,
+                (CaseResult.trace_id.is_not(None)) | (CaseResult.trace_url.is_not(None)),
+            )
+        ).scalar_one()
+        assert pointers == 0
+
+    @pytest.mark.ac("AC-9")
+    def test_the_backfills_audit_event_records_what_the_spine_took(self, backfilled):
+        """A count of rows is not an audit trail. The event names the coverage and every
+        refusal, so a human can tell proof that was not stored from proof that does not
+        exist."""
+        session, product, _ = backfilled
+        detail = session.execute(
+            select(AuditEvent.detail).where(
+                AuditEvent.action == "observations_backfilled"
+            ).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(1)
+        ).scalar_one()
+
+        assert detail["cases"]["inserted"] == 506 * 2
+        assert detail["cases"]["measurements_with_cases"] == 47 * 2
+        assert detail["cases"]["trace_pointer_coverage"] == "not_applicable"
+        assert detail["cases"]["refused_disagreeing"] == []
+        assert detail["cases"]["refused_unmatched"] == []
+        assert detail["cases"]["inputs_stored"] > 0
+
+
+class TestTheSpineRefusesWhatIsNotEvidence:
+    """What `write_cases` will not take, and what it says instead.
+
+    Every refusal here is a case a finding will not be able to cite, so none of them is
+    allowed to be silent: the rows are not written, the reason is named in the audit
+    event, and the backfill's own line says a refusal happened.
+    """
+
+    def _candidate(self, *, passed, total, cases, metric="m", run="r1"):
+        return ObservationCandidate(
+            metric=metric,
+            value=passed / total,
+            measured_at=datetime(2026, 9, 15, 13, 0, tzinfo=UTC),
+            passed=passed,
+            total=total,
+            run_id=run,
+            run_url=f"https://host.example/blob/ef07ac9/{run}.json",
+            cases=cases,
+        )
+
+    def _write(self, session, product, candidate):
+        return persist.write_observations(
+            session, product=product, candidates=[candidate],
+            source_id=None, actor=ACTOR,
+        )
+
+    @pytest.fixture
+    def product(self):
+        org = make_org("refusals")
+        with org_session(org) as session:
+            yield session, state.register(
+                session, org_id=org, key="k", name="K", ref_prefix="K", actor=ACTOR
+            )
+
+    @pytest.mark.ac("AC-22")
+    def test_cases_that_do_not_add_up_to_their_number_are_refused(self, product):
+        """The number says two of two passed and the cases say one of them failed. One
+        of the two is wrong and the Layer cannot tell which, so it stores the number and
+        refuses the cases: a finding citing evidence that contradicts its own claim is
+        worse than one citing none."""
+        session, row = product
+        written = self._write(session, row, self._candidate(
+            passed=2, total=2,
+            cases=(CaseOutcome("1", "pass"), CaseOutcome("2", "fail", "[redacted]")),
+        ))
+
+        assert written.inserted == 1, "the observation itself should still be stored"
+        assert written.cases.inserted == 0
+        assert written.cases.disagreeing == ["m@r1"]
+        stored = session.execute(select(func.count()).select_from(CaseResult)).scalar_one()
+        assert stored == 0
+
+    def test_two_cases_sharing_an_id_keep_the_first_and_name_the_second(self, product):
+        """Two rows in one run under one id cannot be addressed individually, so the
+        second is refused rather than overwriting the first — and `case:102/14` would
+        otherwise resolve to whichever row happened to be written last."""
+        session, row = product
+        written = self._write(session, row, self._candidate(
+            passed=1, total=2,
+            cases=(CaseOutcome("14", "pass"), CaseOutcome("14", "fail", "[redacted]")),
+        ))
+
+        assert written.cases.inserted == 1
+        assert written.cases.duplicate_ids == ["m@r1/14"]
+
+    def test_an_oversized_case_id_is_refused_rather_than_truncated(self, product):
+        """A truncated id is a different id, and two cases truncating to the same string
+        would silently become one piece of evidence."""
+        session, row = product
+        written = self._write(session, row, self._candidate(
+            passed=1, total=2,
+            cases=(CaseOutcome("1", "pass"), CaseOutcome("x" * 200, "fail", "[r]")),
+        ))
+
+        assert written.cases.inserted == 1
+        assert len(written.cases.oversized_ids) == 1
+
+    def test_a_refusal_reaches_the_line_the_backfill_prints(self, product):
+        """A smaller number of rows is not a report. Somebody reading the step's output
+        has to see that proof was refused without going to the audit log for it."""
+        session, row = product
+        written = self._write(session, row, self._candidate(
+            passed=2, total=2,
+            cases=(CaseOutcome("1", "pass"), CaseOutcome("2", "fail", "[redacted]")),
+        ))
+        assert written.cases.refusals == 1
+
+
+@pytest.mark.ac("AC-26")
+def test_a_source_whose_rows_carry_no_text_stores_no_input_at_all(alien_repo):
+    """The third fixture's per-case rows hold a reference, a prediction, a label and a
+    duration, and no text whatsoever. That is AC-26's `not_applicable` rather than a
+    missing value, and it is why the CHECK does not demand the converse."""
+    org = make_org("spine-alien")
+    with org_session(org) as session:
+        product = onboard_alien(session, org, alien_repo, with_code=False)
+        run.import_spec(session, product=product, actor=ACTOR)
+        run.backfill(session, product=product, actor=ACTOR)
+
+        rows = session.execute(
+            select(CaseResult.outcome, CaseResult.input_redacted)
+            .join(Observation, Observation.id == CaseResult.observation_id)
+            .where(Observation.product_id == product.id)
+        ).all()
+
+        assert rows, "the third fixture stored no cases at all"
+        assert any(outcome == "fail" for outcome, _ in rows)
+        assert all(text is None for _, text in rows)
 
 
 def test_a_binding_across_different_units_is_refused(alien_repo):
