@@ -223,6 +223,21 @@ def _findings(args) -> int:
     return 0
 
 
+def _serve(args) -> int:
+    """Serve the MCP tool surface over stdio.
+
+    Nothing is printed on success: stdout is the protocol's own channel, and a banner
+    written to it is a parse error at the other end.
+    """
+    from layer.mcp import server as mcp_server  # noqa: PLC0415
+
+    # `--as` is the same argument every other command takes, and it means the same
+    # thing here: who the writes are attributed to. Identity, not authentication — the
+    # server cannot verify the claim and does not pretend to (phase 4's job).
+    mcp_server.run(org_id=args.org, transport=args.transport, actor=args.actor)
+    return 0
+
+
 def _status(args) -> int:
     with org_session(args.org) as session:
         product = state.get(session, key=args.product)
@@ -319,6 +334,13 @@ def _parser() -> argparse.ArgumentParser:
                           help="print the resolved url for every piece of evidence")
     findings.set_defaults(handler=_findings)
     with_common(sub.add_parser("status")).set_defaults(handler=_status)
+
+    serve = with_common(sub.add_parser("serve", help="step 7: the MCP server"), product=False)
+    serve.add_argument("--transport", default="stdio",
+                       choices=["stdio", "sse", "streamable-http"],
+                       help="stdio is the only one phases 1 to 3 use; the others arrive "
+                            "with phase 4 and change nothing else")
+    serve.set_defaults(handler=_serve)
     return parser
 
 

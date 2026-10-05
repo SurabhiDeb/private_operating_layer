@@ -141,11 +141,16 @@ def _clause_resolver(session: Session, product_id: uuid.UUID, handle: RepoHandle
                 Clause.ref == ref.id,
                 Clause.status == "active",
             )
-        ).scalar_one_or_none()
-        if path is None:
+        ).scalars().first()
+        if path is None or row is None:
+            # `row is None` means no active clause carries this ref. Returning the
+            # document's URL anyway would resolve a citation to a record that does not
+            # exist — B3 rule 7, "never cite a record it did not read" — and it did,
+            # until a proposal with deliberately bogus evidence was accepted because its
+            # citation "resolved". An unknown ref now lands in `unresolved`, visibly.
             return None
         line = None
-        if row and row.startswith("L") and row[1:].split("-")[0].isdigit():
+        if row.startswith("L") and row[1:].split("-")[0].isdigit():
             line = int(row[1:].split("-")[0])
         return handle.blob_url(path, line)
 

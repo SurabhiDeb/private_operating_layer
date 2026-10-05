@@ -115,15 +115,15 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
         rows = _series(session, product.id, bar.metric)
         if not rows:
             continue
-        breaching = [r for r in rows if _violates(bar.clause, r.value)]
+        breaching = [r for r in rows if violates(bar.clause, r.value)]
         if not breaching:
             continue
 
         worst = _worst(bar.clause, breaching)
         latest = rows[-1]
         first = breaching[0]
-        current = _violates(bar.clause, latest.value)
-        cases, cases_total, cases_state = _failing_cases(session, product, breaching)
+        current = violates(bar.clause, latest.value)
+        cases, cases_total, cases_state = failing_cases_for(session, product, breaching)
         staleness = _staleness(windows, latest, now)
 
         out.append(Finding(
@@ -222,10 +222,15 @@ def _drift_summary(
     return " ".join(parts)
 
 
-def _failing_cases(
+def failing_cases_for(
     session: Session, product: Product, breaching: list[Observation]
 ) -> tuple[list[dict], int, str]:
     """The individual cases beneath the runs that missed the bar. **This is the proof.**
+
+    Public because B11's `failing_cases` tool answers the same question for a clause over
+    a window, and two implementations of "which cases are the proof" would eventually
+    disagree — at which point the finding and the tool would cite different evidence for
+    the same claim.
 
     PRD AC-22 and B3 rule 10: a finding that asserts a bar was missed cites the cases
     that missed it, and an empty list beside `runs_missed > 0` is a defect rather than a
@@ -694,7 +699,13 @@ def _unbound_metrics(session: Session, product: Product, bound: set[str]) -> lis
     return [m for m in rows if m not in bound and m not in rejected]
 
 
-def _violates(clause: Clause, value: float) -> bool:
+def violates(clause: Clause, value: float) -> bool:
+    """Whether one recorded number breaches one clause's bar.
+
+    Public for the same reason `failing_cases_for` is: B11's `failing_cases` tool has to
+    decide which runs missed the bar, and a second implementation of "missed" would
+    eventually disagree with the finding's.
+    """
     if clause.comparator == ">=":
         return value < clause.value
     if clause.comparator == "<=":
