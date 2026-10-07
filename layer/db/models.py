@@ -61,7 +61,10 @@ ACTOR_ROLES = ("pm", "engineer", "agent")
 #: engineer accepting a `clause_change` would be editing the spec through the side
 #: door, which is the move US-10 exists to prevent.
 ROLE_DECIDES: dict[str, tuple[str, ...]] = {
-    "pm": ("clause_change", "new_clause", "link", "eval_case", "ci_change"),
+    "pm": ("clause_change", "new_clause", "link", "eval_case", "ci_change", "ticket"),
+    # Not `ticket`: deciding that a gap becomes work for the team is the product
+    # manager's call, and US-2 is their story. The engineer's authority is over the gate
+    # and the suite, which is exactly these two.
     "engineer": ("ci_change", "eval_case"),
     "agent": (),
 }
@@ -292,7 +295,13 @@ KNOWN_LINK_TYPES = (
 KNOWN_UNITS = ("ratio", "percent", "count", "duration_ms", "duration_s", "currency",
                "score", "tokens", "none")
 KNOWN_DIRECTIONS = ("higher_is_better", "lower_is_better", "within_band", "none")
-KNOWN_PROPOSAL_KINDS = ("clause_change", "new_clause", "link", "eval_case", "ci_change")
+#: `ticket` is the other half of US-2's "either a threshold change or a ticket, never
+#: both in one proposal". It is a proposal kind rather than a side channel because the
+#: choice between it and a `clause_change` is the judgement a human is being asked to
+#: make: one says the spec was wrong, the other says the product is. Open vocabulary, so
+#: adding it needed no migration.
+KNOWN_PROPOSAL_KINDS = ("clause_change", "new_clause", "link", "eval_case", "ci_change",
+                        "ticket")
 
 
 class Clause(Base):
@@ -782,6 +791,15 @@ class Proposal(Base):
     #: The target's version when the proposal was made. If the target has moved since,
     #: the proposal is stale and must not be applied over a human's edit (H2).
     target_version: Mapped[int | None] = mapped_column(nullable=True)
+    #: AC-34 and AC-35: a queue order a human can disagree with, and the signals behind
+    #: it. Null means unranked rather than last — an agent's proposal over MCP competed
+    #: with nothing. Never presented as importance or severity of impact (AC-35).
+    rank: Mapped[int | None] = mapped_column(nullable=True)
+    rank_signals: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: The record a proposal describes but that does not exist yet — a `new_clause`'s
+    #: fields. Its own column rather than a corner of `critic`: that one holds a score,
+    #: and a reader who finds a clause definition in it will mistrust both.
+    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     proposed_by: Mapped[str] = mapped_column(String(255), nullable=False)
     decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

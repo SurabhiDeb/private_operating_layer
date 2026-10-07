@@ -46,6 +46,13 @@ def registry_for(session: Session, *, product) -> Registry:
         break
 
     registry.register("obs", _observation_resolver(session, product.id))
+    # `eval_metric:<product>/<metric>`, which an H16 finding cites as its subject: a
+    # number measured that no clause promises. Registered because without it that
+    # finding's citation lands in `unresolved`, and B6 sets citation resolvability at
+    # 100% while AC-14 requires `unresolved` to be empty across all findings. It was
+    # found by running the findings against the second reference product, whose eval
+    # source carries a metric the first one's does not.
+    registry.register("eval_metric", _eval_metric_resolver(session, product.id))
     registry.register(
         "case",
         _case_resolver(session, product.id, traces.retention_for(session, product.id)),
@@ -58,6 +65,37 @@ def registry_for(session: Session, *, product) -> Registry:
             "clause", _clause_resolver(session, product.id, handle, spec.config.get("path"))
         )
     return registry
+
+
+def _eval_metric_resolver(session: Session, product_id: uuid.UUID):
+    """`eval_metric:<product>/<metric>` to the newest run that carries that metric.
+
+    **The run, not the metric's definition.** The definition lives in the source's
+    `config`, which is a database row rather than something a human can open, and
+    pointing a citation at a config row would satisfy the letter of "it resolved" while
+    handing the reader nothing to look at. The newest run carrying the number is a real
+    document at an immutable revision, and it is where somebody checking "is this metric
+    really being measured and unpromised?" needs to land.
+
+    An unparseable ref returns None rather than guessing, which puts it in `unresolved`
+    where rule 4 requires it to be displayed.
+    """
+    def resolve(ref: Ref) -> str | None:
+        metric = ref.id.rsplit("/", 1)[-1] if "/" in ref.id else ref.id
+        if not metric:
+            return None
+        return session.execute(
+            select(Observation.run_url)
+            .where(
+                Observation.product_id == product_id,
+                Observation.metric == metric,
+                Observation.run_url.is_not(None),
+            )
+            .order_by(Observation.measured_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+    return resolve
 
 
 def _observation_resolver(session: Session, product_id: uuid.UUID):

@@ -270,6 +270,7 @@ def _apply(session: Session, row: Proposal, *, by: str) -> dict:
         "link": _apply_link,
         "eval_case": _apply_deferred,
         "ci_change": _apply_ci_change,
+        "ticket": _apply_ticket,
     }.get(row.kind)
     if handler is None:
         raise Unreadable(
@@ -324,8 +325,7 @@ def _apply_new_clause(session: Session, row: Proposal, *, by: str) -> dict:
     read as a met or missed bar, and a clause born from an `uncovered` finding has by
     definition never been measured against anything.
     """
-    payload = dict(row.critic or {}).get("clause") if row.critic else None
-    fields = payload or {}
+    fields = dict(row.payload or {})
     ref = row.target.split(":", 1)[-1]
     new = Clause(
         org_id=row.org_id,
@@ -406,6 +406,31 @@ def _apply_ci_change(session: Session, row: Proposal, *, by: str) -> dict:
         ),
         "intended": {"target": row.target, "field": row.field,
                      "new_value": row.new_value},
+    }
+
+
+def _apply_ticket(session: Session, row: Proposal, *, by: str) -> dict:
+    """Records that the work was accepted. **It does not file the ticket.**
+
+    US-2's other branch: where the history shows the bar is reachable, the gap is work
+    rather than a specification error. Filing it means writing into Linear or Jira, which
+    needs a `ticket` role source bound — phase 6, and open question 2's neighbour. The
+    decision and its approval record are real now; the act of filing is a named seam.
+
+    This handler arrived after the decide path did, because the `ticket` kind did. The
+    path refuses an unknown kind rather than silently recording an approval for a change
+    nothing applies, which is why its absence showed up as a failing test rather than as
+    a proposal that looked accepted and did nothing.
+    """
+    return {
+        "recorded": True,
+        "ticket": None,
+        "pending": (
+            "the ticket is not filed: that needs a ticket source bound to this product, "
+            "which no phase before 6 provides. The approval and the work it describes "
+            "are recorded."
+        ),
+        "intended": {"target": row.target, "summary": row.new_value},
     }
 
 

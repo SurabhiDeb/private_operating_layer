@@ -578,24 +578,29 @@ class TestRefusals:
 class TestCitationsAndLanguage:
     @pytest.mark.ac("AC-7")
     @pytest.mark.ac("AC-14")
-    def test_every_citation_resolves_to_a_pinned_revision(self, triage):
+    def test_every_citation_resolves_to_a_pinned_revision(self, triage, policydesk):
         """AC-7 and AC-14. `unresolved` must be empty, and every URL must name an immutable
-        revision rather than a branch."""
-        session, product = triage
-        found = queries.find_all(session, product=product)
+        revision rather than a branch.
 
+        **Both products, which is the point.** This test ran against one of them and
+        passed while an `eval_metric:` citation resolved nowhere, because the ref only
+        appears on an H16 finding and only the second product has a metric no clause
+        promises. AC-14 says "across all findings", and one product's findings are not
+        all of them.
+        """
         checked = 0
-        for result in found.values():
-            for finding in result.findings:
-                assert finding.evidence, f"{finding.kind} cited nothing"
-                assert finding.unresolved == [], (
-                    f"{finding.kind}/{finding.clause_ref} could not resolve "
-                    f"{finding.unresolved}"
-                )
-                for link in finding.evidence_links:
-                    assert "/blob/main/" not in link["url"]
-                    assert "/blob/master/" not in link["url"]
-                    checked += 1
+        for session, product in (triage, policydesk):
+            for result in queries.find_all(session, product=product).values():
+                for finding in result.findings:
+                    assert finding.evidence, f"{finding.kind} cited nothing"
+                    assert finding.unresolved == [], (
+                        f"{product.key} {finding.kind}/{finding.clause_ref} could not "
+                        f"resolve {finding.unresolved}"
+                    )
+                    for link in finding.evidence_links:
+                        assert "/blob/main/" not in link["url"]
+                        assert "/blob/master/" not in link["url"]
+                        checked += 1
         assert checked > 20, "too few citations were checked for this to mean anything"
 
     def test_a_clause_citation_points_at_the_lines_that_stated_it(self, triage):

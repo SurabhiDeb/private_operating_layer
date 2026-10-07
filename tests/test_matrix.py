@@ -40,11 +40,11 @@ DEFERRED: dict[str, tuple[str, str]] = {
                          "tested, and cannot be, is the criterion itself — twenty real "
                          "proposals decided by a person. That needs the generators and a "
                          "human's time, and the number has to land where it lands"),
-    "AC-34": ("phase 5", "proposal.rank and the signals behind it, which the harvest "
-                         "generator produces"),
-    "AC-35": ("phase 5", "a harvested case surviving into an eval suite with its "
-                         "provenance"),
-    "AC-36": ("phase 5", "harvested_case_yield over a full eval cycle"),
+    "AC-36": ("phase 6", "harvested_case_yield, which B6 defines as measured no sooner "
+                         "than one full eval cycle after a human accepted cases into a "
+                         "suite. Two things are missing and only one is code: no "
+                         "production source exists to harvest from, and a full cycle has "
+                         "to elapse. It cannot be closed by building anything"),
     # -- hard cases --------------------------------------------------------------
     "H7": ("phase 5", "the trace expiry is tested; marking a proposal evidence-expired "
                       "needs the proposal lifecycle"),
@@ -55,17 +55,17 @@ DEFERRED: dict[str, tuple[str, str]] = {
                         "the pattern defaults is US-9's second bullet and is not built"),
     "EC-8": ("phase 5", "the citation rule is tested; the evidence-expired state belongs "
                         "to the proposal lifecycle"),
-    "EC-10": ("phase 5", "failing closed when the model provider is unavailable. Nothing "
-                         "in phases 1 to 3 calls a model"),
+    "EC-10": ("phase 5", "the structural half is tested: a generator run is one "
+                         "transaction and one that raises part-way writes nothing. The "
+                         "literal case — a model provider unavailable mid-proposal — "
+                         "cannot be tested while no path calls a model, which is still "
+                         "true: the generators are deterministic and the LLM pass over "
+                         "spec prose is designed for and not built"),
     "EC-11": ("phase 6", "the discipline is tested; a spec-versus-ticket conflict needs a "
                          "ticket source"),
-    "EC-12": ("phase 5", "a permanently easy threshold is a proposal to raise the bar, "
-                         "which needs the generators"),
     # -- user stories ------------------------------------------------------------
     "US-1": ("phase 5", "the weekly harvest, its clustering, ranking and cap. The whole "
                         "story is the write half"),
-    "US-2": ("phase 5", "comparing a run against its clause is tested through drift; "
-                        "proposing a threshold change or a ticket needs the generators"),
     "US-12": ("phase 5", "every pull request the Layer opens. It opens none yet"),
 }
 

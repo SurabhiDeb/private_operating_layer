@@ -370,6 +370,55 @@ def propose_binding(
 # -- the one path every proposal takes -------------------------------------------
 
 
+def propose(
+    session: Session,
+    *,
+    product: Product,
+    kind: str,
+    target: str,
+    field: str,
+    new_value: str | None,
+    reason: str,
+    evidence: list[str],
+    actor: str,
+    if_rejected: str,
+    old_value: str | None = None,
+    confidence: float | None = None,
+    target_version: int | None = None,
+    rank: int | None = None,
+    rank_signals: dict | None = None,
+    payload: dict | None = None,
+    capability: str | None = None,
+) -> ProposedChange | Refusal:
+    """The general creation path, for the Layer's own generators.
+
+    **Not an MCP tool, and not reachable from one.** `layer/mcp/server.py` wires three
+    write tools by hand — `propose_change`, `propose_link`, `propose_binding` — each of
+    which names its target in terms an agent can be trusted with: an existing clause, an
+    edge between two refs, a metric paired with a clause. This one takes any target,
+    which is what a generator needs and what an agent must not have.
+
+    It exists so that the generators share `_create` — one B4 gate, one place where
+    evidence is resolved and a duplicate refused — rather than growing a second one that
+    drifts from the first.
+    """
+    if kind not in KNOWN_PROPOSAL_KINDS:
+        return Refusal(
+            reason=(
+                f"{kind!r} is not a proposal kind this Layer knows. Known: "
+                f"{', '.join(KNOWN_PROPOSAL_KINDS)}."
+            ),
+            missing=[],
+        )
+    return _create(
+        session, product=product, kind=kind, target=target, field=field,
+        old_value=old_value, new_value=new_value, reason=reason, evidence=evidence,
+        actor=actor, if_rejected=if_rejected, confidence=confidence,
+        target_version=target_version, rank=rank, rank_signals=rank_signals,
+        payload=payload, capability=capability,
+    )
+
+
 def _create(
     session: Session,
     *,
@@ -385,6 +434,10 @@ def _create(
     if_rejected: str | None,
     confidence: float | None,
     target_version: int | None = None,
+    rank: int | None = None,
+    rank_signals: dict | None = None,
+    payload: dict | None = None,
+    capability: str | None = None,
 ) -> ProposedChange | Refusal:
     """Every B4 and B3 check in one place, so no proposal path can skip one."""
     try:
@@ -434,6 +487,10 @@ def _create(
         org_id=product.org_id,
         product_id=product.id,
         kind=kind,
+        #: Which generator produced it, or null for a proposal that came in over MCP.
+        #: Provenance for the acceptance rate: a rate of 40% means something different
+        #: when one generator produced every rejection.
+        capability=capability,
         target=target,
         field=field,
         old_value=old_value,
@@ -444,13 +501,24 @@ def _create(
         confidence=confidence,
         state="open",
         target_version=target_version,
+        rank=rank,
+        rank_signals=rank_signals,
+        # What the accept path needs to build a record the proposal describes but that
+        # does not exist yet. Never read as an approval of anything (B3 rule 3).
+        payload=payload,
         proposed_by=actor,
     )
-    session.add(row)
     try:
-        session.flush()
+        # A savepoint, not the transaction. One write per call made a full rollback look
+        # harmless; a generator run makes several, and rolling back there would let one
+        # duplicate candidate silently discard every proposal written before it — which
+        # is what happened the first time the generators ran against a product whose two
+        # clauses share one CI file. EC-10's "no partial proposal is written" is about a
+        # single proposal being half-written, and a savepoint still guarantees that.
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
     except IntegrityError:
-        session.rollback()
         # B4 item 4, enforced by a partial unique index on the open ones.
         return Refusal(
             reason=(

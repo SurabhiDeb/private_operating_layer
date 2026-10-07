@@ -805,3 +805,11 @@ def _plain(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:g}"
+
+
+# -- names the generators depend on ----------------------------------------------
+#: Phase 5's generators rank on the observation series and quote the stated bar. Exported
+#: under public names rather than reached into as privates, so the dependency is visible
+#: from here and a rename cannot break another module silently.
+series_for = _series
+bar_text = _bar_text

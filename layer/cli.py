@@ -20,11 +20,12 @@ from sqlalchemy import select
 from layer.core import actors, audit, freshness
 from layer.core.db import org_session, unscoped_session
 from layer.core.durations import format_duration, parse_duration
-from layer.core.errors import LayerError, Unreadable
+from layer.core.errors import LayerError, Refusal, Unreadable
 from layer.db import models
 from layer.db.models import ACTOR_ROLES, Actor, Org, Product
 from layer.answers import decisions
 from layer.findings import queries
+from layer.proposals import generators
 from layer.onboarding import bindings as binding_gate
 from layer.onboarding import run, state
 
@@ -252,6 +253,31 @@ def _findings(args) -> int:
     return 0
 
 
+def _generate(args) -> int:
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product)
+        result = generators.generate(session, product=product, actor=args.actor)
+        if isinstance(result, Refusal):
+            print(f"refused: {result.reason}", file=sys.stderr)
+            return 1
+        print(f"{product.key}: {len(result.proposals)} proposal(s) presented "
+              f"of cap {result.cap}")
+        if result.beyond_cap:
+            # US-1: the cap is a priority order, never a deletion.
+            print(f"  {result.beyond_cap} ranked beyond the cap, stored and queryable")
+        for proposal in result.proposals:
+            print(f"  [{proposal.kind}] {proposal.target}.{proposal.field_name} "
+                  f"-> {proposal.new_value}")
+        for item in result.declined:
+            # Read and deliberately not proposed, with the reason. Distinct from
+            # "not looked at", which is the distinction EC-4 exists to preserve.
+            print(f"  declined {item.get('clause_ref') or item['finding']}: "
+                  f"{item['reason']}")
+        for refusal in result.refusals:
+            print(f"  refused: {refusal.reason}")
+    return 0
+
+
 def _proposals_list(args) -> int:
     with org_session(args.org) as session:
         product = state.get(session, key=args.product) if args.product else None
@@ -443,6 +469,10 @@ def _parser() -> argparse.ArgumentParser:
     findings.add_argument("--citations", action="store_true",
                           help="print the resolved url for every piece of evidence")
     findings.set_defaults(handler=_findings)
+    with_common(sub.add_parser(
+        "generate", help="step 8: findings into proposals"
+    )).set_defaults(handler=_generate)
+
     proposals = sub.add_parser(
         "proposals", help="the write half: what is waiting on a human"
     ).add_subparsers(dest="proposals_command")
