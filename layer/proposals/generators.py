@@ -39,6 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from layer.answers import writes
+from layer.core import audit
 from layer.answers.shapes import ProposedChange
 from layer.core.errors import NotLive, Refusal
 from layer.db.models import Clause, Product
@@ -100,8 +101,18 @@ class GeneratorRun:
         }
 
 
+#: What `proposed_by` records on a generated proposal. **Not the operator who ran the
+#: command**: the Layer proposed it, and writing a person's name there would make a
+#: proposal look like something they put their name to. It also makes `proposed_by ==
+#: decided_by` impossible to reach by accident, which is worth having on the one metric
+#: the whole product is judged by. Who triggered the run is in the audit log.
+PROPOSER = "layer:generators"
+
+GENERATOR_RUN = "generator_run"
+
+
 def generate(
-    session: Session, *, product: Product, actor: str = "generator"
+    session: Session, *, product: Product, actor: str = PROPOSER
 ) -> GeneratorRun | Refusal:
     """Every proposal the record justifies for one product, ranked, capped and stored.
 
@@ -109,6 +120,9 @@ def generate(
     binding, and a fresh install says so rather than generating suggestions about a
     product that does not exist (AC-17, AC-20). The check is here as well as inside
     `_create` so that the refusal names the product once rather than once per candidate.
+
+    `actor` is who **triggered** the run and goes in the audit event. Every proposal it
+    creates is attributed to `PROPOSER`, because the Layer proposed it and they did not.
     """
     try:
         state.require_live(session, product=product)
@@ -136,7 +150,7 @@ def generate(
             new_value=candidate.new_value,
             reason=candidate.reason,
             evidence=candidate.evidence,
-            actor=actor,
+            actor=PROPOSER,
             if_rejected=candidate.if_rejected,
             target_version=candidate.target_version,
             rank=position,
@@ -151,6 +165,24 @@ def generate(
             run.proposals.append(result)
         else:
             run.beyond_cap += 1
+
+    # One event for the run, naming who triggered it. Each proposal has its own
+    # `proposal_created` event; this is the one that answers "why did fourteen of these
+    # appear at once".
+    audit.record(
+        session,
+        org_id=product.org_id,
+        actor=actor,
+        action=GENERATOR_RUN,
+        subject=f"product:{product.key}",
+        detail={
+            "generated": len(run.proposals),
+            "beyond_cap": run.beyond_cap,
+            "cap": run.cap,
+            "declined": len(run.declined),
+            "refused": len(run.refusals),
+        },
+    )
     return run
 
 

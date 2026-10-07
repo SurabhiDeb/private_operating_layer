@@ -109,10 +109,13 @@ def require_decider(session: Session, *, email: str, kind: str) -> Actor:
                 f"{actor.email} has role {actor.role!r}, which decides nothing. "
                 "The Layer proposes and a human decides (PRD A3)."
             )
+        # The second sentence is about the role, not about this kind. An earlier version
+        # said "a change to the definition of correct goes through the person accountable
+        # for it", which is true of a `clause_change` and false of a `ticket`.
         raise RoleForbids(
             f"{actor.email} has role {actor.role!r}, which decides "
             f"{', '.join(allowed)} — not {kind}. "
-            "A change to the definition of correct goes through the person accountable for it "
-            "(US-10)."
+            f"An engineer's authority is the gate and the eval suite; everything else is "
+            f"the product manager's (PRD A2, US-10)."
         )
     return actor

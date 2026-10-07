@@ -35,6 +35,8 @@ They are stable across versions and they are how the tests are named.
 .venv/bin/python -m pytest tests/test_matrix.py -s   # the AC / H / US / EC matrix
 .venv/bin/python -m layer --help        # the onboarding CLI (step 7 onward)
 .venv/bin/python -m layer serve --org <id> --as <email>   # the stdio MCP server
+.venv/bin/python -m layer generate --org <id> --as <email> <product>    # findings -> proposals
+.venv/bin/python -m layer proposals list|accept|reject|acceptance       # the human-only tier
 ```
 
 `.venv` is this repo's, Python 3.13.5. `requirements-layer.txt` is the Layer's;
@@ -98,7 +100,8 @@ definition. It may never contain `if product.key == ...`. The prototype's
 `clause.kind` and `link_type` are validated in Python against a registry. Adding a source
 system or a clause kind must not need a migration. Closed sets the Layer branches on —
 `product.status`, `source.status`, `source.role`, `state`, `verdict`, `source_kind`,
-`case_result.outcome` and `enforcement_fact.scope` — get a CHECK.
+`case_result.outcome`, `enforcement_fact.scope`, `proposal.state` and `actor.role` — get a
+CHECK. `proposal.kind` stays open: `ticket` was added in phase 5 with no migration.
 
 **Fixtures.** `tests/fixtures/` is the only place a real product name may appear. A
 fixture name in a migration, a seed script, a default config or a pattern definition is a
@@ -150,6 +153,37 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   run rather than the dead link (AC-23, B3 rule 11). An unparseable window counts as
   undeclared; reading a typo as "every trace is gone" would retire every old finding's
   evidence at once.
+- **The actor table is `actor`, not `user`, and it is identity rather than auth.**
+  `user` is reserved in SQL and the first unquoted reference fails at runtime rather than in
+  a test. `actor.role` is closed and gets a CHECK because the decide path branches on it: a
+  pm decides every kind, an engineer decides `ci_change` and `eval_case`, an `agent` decides
+  nothing — a role for which the path refuses, not an absence of permissions. `--as` stays
+  attribution everywhere except the decide path, where it must resolve, because a role rule
+  enforced against free text is not a rule.
+- **A proposal has two terminal states nobody decided.** `invalidated` (H2, a human edited
+  the target) and `evidence_expired` (H7 and EC-8, retention deleted the proof). Leaving
+  such a proposal `open` keeps it in the acceptance rate and holds
+  `uq_proposal_one_open_per_target` against its own replacement; marking it `rejected`
+  needs a `decided_by` and would forge an approval record. The CHECK requires `decided_by`
+  to be **null** for both, so the database refuses a system-closed proposal that names a
+  decider. The acceptance rate is `accepted / (accepted + rejected)` and both are excluded.
+- **The decide path lives in `layer/answers/decisions.py`, not `writes.py`.** `writes.py`
+  is what `layer/mcp/server.py` imports. B11 says the human-only tier is *absent* rather
+  than unexposed, and absence is a property of the import graph rather than of a comment.
+- **`proposed_by` on a generated proposal is `layer:generators`**, never the operator who
+  ran the command: they did not propose anything, and it keeps `proposed_by == decided_by`
+  unreachable by accident on the one metric the product is judged by. Who triggered the run
+  is in the audit log, as is the sweep, which logs as `layer:sweep` while leaving
+  `decided_by` null.
+- **The drift rule turns on whether the record ever cleared the bar, not on `clause.state`.**
+  Never cleared and not ratified is a `clause_change`; never cleared and ratified is a
+  `ticket`, because the Layer does not propose lowering a promise somebody signed off;
+  cleared before and breaching now is a `ticket`. Keying it off `state` produced a sentence
+  that was false — see `PROGRESS.md`, "What the four steps actually found".
+- **The critic is deliberately last.** B3 rule 3 forbids it from ever gating a
+  `clause_change`, a `new_clause` or a `ci_change`, so it is not on the path to AC-16.
+  `confidence` is null until it exists and must render as `unscored`, never `0.00`: a
+  proposal no critic has seen is not a low-confidence proposal.
 - **Metrics come in three tiers.** Read a named number where the source has one; compute
   it from a declarative definition over per-case rows where it does not; and where neither
   works, report `uncovered / no_metric` rather than reimplementing the customer's scorer.
@@ -176,6 +210,20 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   that globs `*.json` and skips what it cannot parse makes AC-2's reconciliation compare
   47 to 47 and look correct. Classify "not a run record" separately from "a run that
   failed to import", and report both (EC-2, EC-4).
+- **A refusal inside a batch must roll back a savepoint, not the transaction.**
+  `writes._create` called `session.rollback()` on a duplicate proposal, which is invisible
+  at one write per call and silently discarded a whole generator run. EC-10's "no partial
+  proposal is written" is about one proposal being half-written, which `begin_nested` still
+  guarantees.
+- **A test that covers one fixture covers one fixture.** The AC-14 citation test ran against
+  `triage` for twelve steps and passed while `eval_metric:<product>/<metric>` resolved
+  nowhere, because only the *other* reference product has a metric no clause promises. If a
+  finding or a generator changes, run both — and when a condition exists in neither fixture,
+  construct it rather than writing a test that skips on both.
+- **`layer/proposals/__init__.py` re-exports `generate`, so the module is `generators.py`.**
+  A module and a re-exported function sharing a name means `from layer.proposals import
+  generate` hands back whichever was imported last, which fails at the call site rather than
+  at the import.
 - **`git ls-tree` does not glob.** It rejects `:(glob)` magic and treats
   `products/*/runs/*.json` as matching nothing — succeeding, with no output. Path
   filtering happens in Python via `PurePath.full_match`. See `layer/adapters/repo.py`.

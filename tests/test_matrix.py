@@ -46,15 +46,11 @@ DEFERRED: dict[str, tuple[str, str]] = {
                          "production source exists to harvest from, and a full cycle has "
                          "to elapse. It cannot be closed by building anything"),
     # -- hard cases --------------------------------------------------------------
-    "H7": ("phase 5", "the trace expiry is tested; marking a proposal evidence-expired "
-                      "needs the proposal lifecycle"),
     "H10": ("phase 6", "the refusal is tested; elapsed time on a stalled decision needs "
                        "a decision source"),
     # -- edge cases --------------------------------------------------------------
     "EC-1": ("phase 6", "the refusal is tested; deriving clauses from an eval suite and "
                         "the pattern defaults is US-9's second bullet and is not built"),
-    "EC-8": ("phase 5", "the citation rule is tested; the evidence-expired state belongs "
-                        "to the proposal lifecycle"),
     "EC-10": ("phase 5", "the structural half is tested: a generator run is one "
                          "transaction and one that raises part-way writes nothing. The "
                          "literal case — a model provider unavailable mid-proposal — "
@@ -64,8 +60,12 @@ DEFERRED: dict[str, tuple[str, str]] = {
     "EC-11": ("phase 6", "the discipline is tested; a spec-versus-ticket conflict needs a "
                          "ticket source"),
     # -- user stories ------------------------------------------------------------
-    "US-1": ("phase 5", "the weekly harvest, its clustering, ranking and cap. The whole "
-                        "story is the write half"),
+    "US-1": ("phase 6", "the cap, the rank and the signals behind it are tested in "
+                        "tests/test_generators.py, and candidates beyond the cap are "
+                        "retained. What is missing is what there is to harvest: the "
+                        "story collects production traces a judge scored low or a user "
+                        "complained about, and no production source exists to bind. "
+                        "Open question 2 is the same question"),
     "US-12": ("phase 5", "every pull request the Layer opens. It opens none yet"),
 }
 

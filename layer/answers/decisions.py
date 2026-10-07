@@ -29,11 +29,14 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from layer.core import actors, audit
+from layer.findings import traces
 from layer.core.errors import Refusal, Unreadable
-from layer.db.models import Clause, Link, Proposal, Product
+from layer.db.models import Clause, Link, Observation, Product, Proposal
 
 PROPOSAL_ACCEPTED = "proposal_accepted"
 PROPOSAL_REJECTED = "proposal_rejected"
+PROPOSAL_INVALIDATED = "proposal_invalidated"
+PROPOSAL_EVIDENCE_EXPIRED = "proposal_evidence_expired"
 
 #: PRD B6. Both edges matter and the upper one is the unusual part: above it, either the
 #: proposals are trivial or nobody is reading them, and a rubber stamp on changes to the
@@ -68,13 +71,23 @@ def _now(session: Session) -> datetime:
 # -- the queue -------------------------------------------------------------------
 
 
-def queue(session: Session, *, product: Product | None = None) -> list[dict]:
+def queue(
+    session: Session, *, product: Product | None = None, sweep_first: bool = True
+) -> list[dict]:
     """Open proposals, oldest first, in the shape B4 asks a human to read in a minute.
 
     Oldest first rather than newest: a queue that surfaces the newest first quietly
     buries whatever nobody got to, and the buried ones are exactly where an
     evidence-expiry (H7) is waiting.
+
+    **The sweep runs first**, so nothing undecidable is ever presented as decidable. A
+    proposal whose target a human has edited, or whose evidence retention has deleted, is
+    closed before the queue is built rather than when somebody has already spent their
+    minute on it. `sweep_first=False` exists for the tests that want to see an open
+    proposal in the state the sweep would close.
     """
+    if sweep_first and product is not None:
+        sweep(session, product=product)
     stmt = select(Proposal).where(Proposal.state == "open")
     if product is not None:
         stmt = stmt.where(Proposal.product_id == product.id)
@@ -258,6 +271,162 @@ def _active_clause(session: Session, product_id, ref: str) -> Clause | None:
             Clause.product_id == product_id, Clause.ref == ref, Clause.status == "active"
         )
     ).scalars().first()
+
+
+# -- the sweep: H2, H7 and EC-8 ---------------------------------------------------
+
+
+def sweep(session: Session, *, product: Product, now: datetime | None = None) -> dict:
+    """Close the open proposals reality has overtaken, before anybody decides one.
+
+    Two conditions, both of which make a proposal undecidable rather than wrong:
+
+    **H2, the target moved.** A human edited the clause an open proposal targets. Human
+    text wins and the proposal is invalidated rather than merged over. `accept` refuses
+    this case too, but refusing at the moment of decision is not enough on its own: the
+    proposal sits in the queue until somebody spends their minute on it and is then told
+    they cannot have it, which is the minute B4 budgets for a real decision.
+
+    **H7 and EC-8, the evidence went.** Past the source's declared retention the trace
+    body is gone, so a proposal resting on it cannot show its proof. It is marked
+    evidence-expired, never displayed as live with a dead citation — which is B5 item 8,
+    and the thing it ranks as unacceptable is *displaying* it as valid, not having it
+    expire.
+
+    **Neither is a decision and neither names a decider.** The database refuses a
+    system-closed proposal that names one, so this cannot quietly become a way of
+    deciding on a human's behalf.
+
+    **Run before the queue is presented, not on a schedule.** A sweep nobody triggers is
+    a sweep that has not run, and the queue is exactly where the answer matters.
+    """
+    moment = now or _now(session)
+    retention = traces.retention_for(session, product.id)
+    closed = {"invalidated": [], "evidence_expired": []}
+
+    rows = session.execute(
+        select(Proposal).where(
+            Proposal.product_id == product.id, Proposal.state == "open"
+        ).order_by(Proposal.created_at)
+    ).scalars().all()
+
+    for row in rows:
+        stale = _stale_reason(session, row)
+        if stale is not None:
+            _close(session, row, state="invalidated", note=stale, at=moment,
+                   action=PROPOSAL_INVALIDATED)
+            closed["invalidated"].append(str(row.id))
+            continue
+        expired = _expired_reason(session, row, retention, moment)
+        if expired is not None:
+            _close(session, row, state="evidence_expired", note=expired, at=moment,
+                   action=PROPOSAL_EVIDENCE_EXPIRED)
+            closed["evidence_expired"].append(str(row.id))
+
+    return closed
+
+
+def _stale_reason(session: Session, row: Proposal) -> str | None:
+    """H2's condition, as a sentence for the record rather than a boolean."""
+    if row.target_version is None or not row.target.startswith("clause:"):
+        return None
+    ref = row.target.split(":", 1)[1]
+    clause = _active_clause(session, row.product_id, ref)
+    if clause is None:
+        return (
+            f"{row.target} is no longer an active clause, so this proposal has no target. "
+            "Closed without a decision; the next generator run will reconsider the gap."
+        )
+    if clause.version != row.target_version:
+        return (
+            f"{row.target} was at version {row.target_version} when this was proposed and "
+            f"is now at version {clause.version}. A human edited it, and human text wins "
+            f"(H2). Closed without a decision rather than applied over their edit; the "
+            f"next generator run will propose against the new text."
+        )
+    return None
+
+
+def _expired_reason(
+    session: Session, row: Proposal, retention: dict, now: datetime
+) -> str | None:
+    """H7 and EC-8's condition.
+
+    Answered from the source's declared retention window and never from a fetch, which
+    is AC-24's rule: the path that answers "which cases are the proof" makes no live call
+    to the eval platform. An undeclared or unparseable window counts as absent, so
+    nothing expires on a typo (`traces.retention_for`).
+
+    **Only case citations expire.** A `clause:` ref resolves to a specification document
+    at a pinned revision and an `obs:` ref to a stored run record; neither is a trace
+    body that a source deletes. Treating them as expirable would retire proposals whose
+    evidence is perfectly readable.
+    """
+    if not retention:
+        return None
+    cases = [ref for ref in (row.evidence or []) if ref.startswith("case:")]
+    if not cases:
+        return None
+
+    gone: list[str] = []
+    for ref in cases:
+        body = ref.split(":", 1)[1]
+        obs_id = body.split("/", 1)[0]
+        if not obs_id.isdigit():
+            continue
+        found = session.execute(
+            select(Observation.source_id, Observation.measured_at).where(
+                Observation.product_id == row.product_id, Observation.id == int(obs_id)
+            )
+        ).first()
+        if found is None:
+            continue
+        source_id, measured_at = found
+        window = retention.get(source_id)
+        if window is not None and now - measured_at > window:
+            gone.append(ref)
+
+    if not gone or len(gone) < len(cases):
+        # Some proof survives, so the proposal can still show its evidence. B5 item 8 is
+        # about displaying a dead citation as live, not about any citation having aged.
+        return None
+    return (
+        f"every case this proposal cites is past its source's declared trace retention: "
+        f"{', '.join(gone[:4])}"
+        + (f" and {len(gone) - 4} more" if len(gone) > 4 else "")
+        + ". The recorded outcomes survive and the citations point at their runs, but the "
+        "proof a reviewer would open is gone, so this is closed rather than shown as "
+        "live (H7, EC-8, B5 item 8)."
+    )
+
+
+def _close(
+    session: Session, row: Proposal, *, state: str, note: str, at: datetime, action: str
+) -> None:
+    """Close a proposal without a decider, and record that the system did it.
+
+    The same conditional update `_claim` uses, so a sweep racing a human loses to the
+    human rather than overwriting their decision (EC-6 again, from the other side).
+    """
+    result = session.execute(
+        update(Proposal)
+        .where(Proposal.id == row.id, Proposal.state == "open")
+        .values(state=state, decided_by=None, decided_at=at, decision_note=note)
+    )
+    if result.rowcount == 0:
+        return
+    audit.record(
+        session,
+        org_id=row.org_id,
+        # The actor is the Layer itself, which is the honest answer and is why
+        # `decided_by` on the row stays null: the log records who acted, the column
+        # records who decided, and here those are not the same thing.
+        actor="layer:sweep",
+        action=action,
+        subject=f"proposal:{row.id}",
+        detail={"state": state, "reason": note, "target": row.target},
+    )
+    session.expire(row)
 
 
 # -- applying --------------------------------------------------------------------

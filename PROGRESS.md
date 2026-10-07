@@ -5,8 +5,9 @@ Conventions and constraints: `CLAUDE.md`. What the product is: `README.md`.
 
 **Scope.** Phases 1–3 of the handoff's build order: onboarding, the five finding queries,
 and the stdio MCP server. That is the whole read half, usable from a terminal with no UI,
-no agent and no Dust. **All thirteen steps are done.** What follows phase 3 is **not** the handoff's order any more — see
-"Beyond phase 3" at the end of this file.
+no agent and no Dust. **All thirteen steps are done**, and so are **phase 5's four** —
+steps 14 to 17, the write half, recorded at the end of this file. What follows phase 3 is
+**not** the handoff's order any more; see "Beyond phase 3".
 
 **How to read the status column.** A step is `done` only when its tests pass and the
 result has been quoted, never when the code merely exists. Each finished step below records
@@ -62,11 +63,12 @@ What is still outstanding, and where each piece lands, is the table in "What is 
 a glance" below. It is kept in one place so the answer does not have to be assembled from
 this file's prose.
 
-**Tests:** 558 passing. **Migrations:** 5. **Commits:** 42 on `layer-phase-1-3`, ahead of
-`main`, with step 13 and its record unpushed. The count is
-`git rev-list --count main..HEAD`, not recollection — it said 29 until step 10 and was stale
-by four. Step 9 and the first half of step 10 both arrived in `455dcb5`, which is why step
-9's file table and part of step 10's name the same commit.
+**Tests:** 675 passing, of which 558 were the end of phase 3. **Migrations:** 8.
+**Commits:** 45 on `layer-phase-1-3`, ahead of `main`. Every number here is from running
+the thing — `git rev-list --count main..HEAD` and `pytest` — not recollection; the commit
+count said 29 until step 10 and was stale by four. Step 9 and the first half of step 10
+both arrived in `455dcb5`, which is why step 9's file table and part of step 10's name the
+same commit.
 
 ---
 
@@ -79,24 +81,23 @@ criteria are PRD C3's, which holds **39** of them, AC-1 to AC-39.
 | Criterion | What it needs | Lands in |
 |---|---|---|
 | AC-6 | **The walk is done and tested** over a six-link chain in step 12; what is left is a source that produces requirements, decisions and tickets, so a real product's chain is complete rather than hand-written | phase 6 |
-| AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. Needs the write half, the critic, and a person's time | phase 5 |
-| AC-33 | Something that **reads** `harvest_cap`. Stored since step 9, marked by a schema test, and read by nothing until the write half exists | phase 5 |
-| AC-34 | `proposal.rank` and the signals behind it, so a human can disagree with the ordering | phase 5 |
-| AC-35 | A harvested case surviving into an eval suite with its provenance | phase 5 |
-| AC-36 | `harvested_case_yield` computed over a full eval cycle, as a real number rather than null | phase 5 |
+| AC-16 | 20 real proposals decided by a person, scoring inside the 50–85% band. **The queue now exists** — step 16 generates it against both reference products — so the only missing input is a person's time. Not the critic: B3 rule 3 keeps it off this path | a sitting |
+| AC-36 | `harvested_case_yield`, which B6 measures no sooner than one full eval cycle after acceptance. Needs a production source to harvest from **and** a cycle to elapse, so it cannot be closed by building anything | phase 6 and time |
 
-**Everything else in C3 is met**: AC-1 to AC-5, AC-7 to AC-15, AC-17 to AC-32, AC-37, AC-38
-and AC-39. AC-10 to AC-12 closed in step 13 together with AC-37, AC-38 and AC-39; AC-31 and
-AC-32 in step 12. Counted by `tests/test_matrix.py` against the specification rather than by
-hand, which is how the 36-versus-39 discrepancy and three missing markers came to light.
+**Everything else in C3 is met**: AC-1 to AC-5, AC-7 to AC-15, AC-17 to AC-35, AC-37,
+AC-38 and AC-39. AC-33, AC-34 and AC-35 closed in step 16; AC-10 to AC-12 in step 13
+together with AC-37, AC-38 and AC-39; AC-31 and AC-32 in step 12. Counted by
+`tests/test_matrix.py` against the specification rather than by hand, which is how the
+36-versus-39 discrepancy, three missing markers, and AC-35's wrongly recorded deferral
+reason all came to light.
 
 **The other three vocabularies**, same source of truth:
 
 | | Covered | Deferred, with a phase and a reason |
 |---|---|---|
-| Hard cases, H1 to H16 | All sixteen | H2, H7 and H10 are partly covered and say which half |
-| Edge cases, EC-1 to EC-12 | Nine | EC-5, EC-10, EC-12 — phase 5 |
-| User stories, US-1 to US-13 | Nine, as 38 per-criterion tests | US-1, US-2, US-10, US-12 — the write half |
+| Hard cases, H1 to H16 | All sixteen. H2 and H7 closed in steps 15 and 17 | H10 is partly covered and says which half |
+| Edge cases, EC-1 to EC-12 | Eleven. EC-5, EC-6, EC-8 and EC-12 closed in phase 5 | EC-1 and EC-11 — phase 6. EC-10's structural half is tested; nothing calls a model yet |
+| User stories, US-1 to US-13 | Eleven. US-2 and US-10 closed in steps 16 and 15 | US-1 — phase 6, nothing to harvest from. US-12 — it opens no pull request, which needs SEC-3's app installation |
 
 **Three criteria want amending rather than implementing**, and none has been changed to make
 the code look better. AC-25 asks for proof over corpora that contain no PII to find; AC-26
@@ -1842,29 +1843,23 @@ itself guarded, so a parse returning nothing fails rather than reporting full co
 
 ---
 
-## Next
+## After phase 3
 
-**Phases 1 to 3 are done.** What follows is phase 5, then phase 4 as a spike, then phase 6 —
-the order and the reasoning are in "Beyond phase 3" below, and the per-criterion state is in
-"What is left, at a glance" above.
+**Phases 1 to 3 are done, and so is phase 5.** The order — phase 5, then phase 4 as a
+spike, then phase 6 — and the reasoning for it are in "Beyond phase 3" below.
 
-**Phase 5, the write half**, which is where the one metric that matters has never been
-measured. **Planned in full at the end of this file** — "Phase 5 — the write half. The plan,
-against the spec." — as steps 14 to 17, with what each one closes and what it cannot. It needs three things the plan does not yet carry, written up below: an actor model
-that is identity rather than authentication, the generators that produce proposals at all,
-and the critic that scores them and never decides. AC-16 is the gate — twenty proposals
-decided by a person — and it cannot be reached without a person, so the number lands where it
-lands (EC-5).
+**Phase 5, the write half, is built**: steps 14 to 17, planned against the spec and then
+recorded at the end of this file under "Phase 5 — the write half". The actor slice, the
+decide path, the generators and the hard cases. What it deliberately does not close, and
+why, is a table there. The critic is not part of it and the note there says why.
+
+**AC-16 is now the only thing between here and the decision gate**, and it is a sitting
+rather than a step: twenty proposals decided by a person. It cannot be reached without one,
+so the number lands where it lands (EC-5).
 
 **Phase 4 is a half-day spike**, not a deferral, and it answers open question 2: what auth
 hosted Dust's credential policy accepts for a remote MCP server. Nothing in the Layer changes
 when it is answered; `run(transport=...)` already takes the argument.
-
-**And two documents that disagree with the code.** `CLAUDE.md` says `README.md` documents
-EarlyEcho, when `README.md` is the Layer's since `de21e88`; its closed-set list omits
-`source.status`; and its hard constraints do not carry B3 rules 10 to 12 or the
-`confirm_binding` rule. `README.md` says "All 12 tables" and "Three of the five findings",
-where it is now 13 and five. Both are step 13's tail, not optional.
 
 ---
 
@@ -2050,15 +2045,37 @@ generators, and the four hard cases that make the write half honest.
 
 ## The build order
 
-Four steps. The critic is deliberately **not** among them — see the note at the end.
+Four steps, **all four done**. The critic is deliberately not among them — see the note
+at the end.
 
-| # | Step | Closes |
-|---|---|---|
-| 14 | The actor: a table, a role, and `--as` that resolves | the precondition for `decided_by` |
-| 15 | The decide path: accept and reject, human-only, with an approval record | US-10, AC-9 extended to decisions, EC-5 |
-| 16 | The generators: findings into proposals | US-2, US-3, EC-12, AC-34, AC-35, and the input to AC-16 |
-| 17 | The hard cases: EC-6, H2, H7 and EC-8 | the reason the write half is trustworthy |
-| — | **AC-16** | not a build step. ~20 proposals, decided by a person |
+| # | Step | Closes | Status |
+|---|---|---|---|
+| 14 | The actor: a table, a role, and `--as` that resolves | the precondition for `decided_by` | **done** |
+| 15 | The decide path: accept and reject, human-only, with an approval record | US-10, AC-9 extended to decisions, EC-5, EC-6, H2 at accept time | **done** |
+| 16 | The generators: findings into proposals | US-2, US-3, EC-12, AC-33, AC-34, AC-35, EC-10's structural half | **done** |
+| 17 | The hard cases: H2's sweep, H7 and EC-8 | the reason the write half is trustworthy | **done** |
+| — | **AC-16** | not a build step. ~20 proposals, decided by a person | **waiting on a person** |
+
+**675 tests passing**, up from 558 at the end of phase 3. **Migrations: 8.** Counted by
+running them, not recalled.
+
+**What the terminal does now, end to end, against a reference product:**
+
+```
+layer actor add pm@example.com --role pm
+layer generate            --org <id> --as ops@example.com triage
+layer proposals list      --org <id> --as ops@example.com --product triage
+layer proposals accept    --org <id> --as pm@example.com <id>
+layer proposals reject    --org <id> --as eng@example.com <id> --reason "..."
+layer proposals acceptance --org <id> --as ops@example.com --product triage
+```
+
+Verified by driving it: eleven proposals from `triage`, including the H14 case as
+`file:products/triage/gate.py . scope -> all_runs`, which is condition 1's root cause
+turned into a change somebody can approve. An engineer accepting a `ticket` is refused by
+role; an unregistered decider is refused with the command that fixes it; the rate prints
+`50% (band 50% to 85%) [provisional]` over two decisions and says why `provisional` is
+not a verdict.
 
 ---
 
@@ -2231,3 +2248,100 @@ be on the path to AC-16 — it scores and routes for display. The `confidence` a
 columns stay null until it exists, and a null must not render as low confidence, which is
 the one thing the display has to get right in the meantime. It slots after step 16 whenever
 the queue is long enough that ordering it matters.
+
+---
+
+## What the four steps actually found
+
+Recorded because each one changed the code rather than the plan, and because three of the
+five were only visible by running the thing against a real product rather than by reading
+it.
+
+**Step 16 found four defects, three of them in the new code.**
+
+| # | What it was | Why it mattered |
+|---|---|---|
+| 1 | A drift rule with two branches and three cases. Keyed off `clause.state`, a `measured` bar that no run ever cleared took the ticket branch and asserted "the history clears the bar elsewhere" — of a clause missed in 3 of 3 runs | A reason a human can check against the finding has to be true in the branch that wrote it. `ever_cleared` decides now, and the third case — a **ratified** bar nothing ever cleared — is a ticket, because the Layer does not propose lowering a promise somebody signed off |
+| 2 | A `ci_change` proposed from a scan that had read no gate | `find_unenforced` is right to report the clause; a proposal to *add* a gate asserts no gate exists, which an empty scan has not established. Declined with the reason, naming which of the two it is: no code source bound, or one bound that read nothing. Same discipline as `scope: undetermined` |
+| 3 | H14 emitted one proposal per clause where two clauses share one gate file | One change to one file is one proposal (B4 item 1). The duplicate was refused by `uq_proposal_one_open_per_target`, which is how it surfaced |
+| 4 | **Not new code.** `writes._create` called `session.rollback()` on a duplicate | Harmless for one write per call, and it discards a whole generator run. Scoped to a savepoint. EC-10's "no partial proposal is written" is about one proposal being half-written, which a savepoint still guarantees |
+
+**And one in phase 2, found by the rule in `CLAUDE.md` about running against both
+fixtures.** An H16 finding cites `eval_metric:<product>/<metric>` and no resolver existed,
+so `unresolved` was non-empty — against AC-14 and B6's 100% citation resolvability. The
+AC-14 test ran against one product, which has no metric nothing promises, so it passed for
+twelve steps. The resolver now points at the newest run carrying the number, and the test
+runs against both products. Verified by removing the resolver and watching the broadened
+test fail.
+
+**The schema question step 17 had to answer first.** `PROPOSAL_STATES` was
+`open / accepted / rejected`, and both H2 and H7 need a proposal to end without anybody
+having decided it. Neither shortcut works: leaving it `open` keeps it in the acceptance
+rate's denominator and holds the one-open-per-target index against its own replacement, so
+the queue stops healing after the first human edit; marking it `rejected` needs a
+`decided_by`, and putting a name there forges an approval record, which is B5 item 1. So
+migration 8 adds `invalidated` and `evidence_expired`, and
+`ck_proposal_decision_record` grows a third case: the two system-closed states require
+`decided_by` to be **null** and a reason to be stated. The database now refuses a
+system-closed proposal that names a decider.
+
+**Which fixed B6's most important number before it was ever reported.** The rate is
+`accepted / (accepted + rejected)`. A proposal nobody decided belongs in neither half, so
+it cannot quietly depend on how much evidence had expired. The excluded counts are
+reported rather than dropped.
+
+**Two attribution calls worth recording.** `proposed_by` on a generated proposal is
+`layer:generators`, never the operator who typed the command — they did not propose
+anything, and it makes `proposed_by == decided_by` unreachable by accident on the one
+metric the product is judged by. The sweep logs as `layer:sweep` while leaving
+`decided_by` null: the log records who acted, the column records who decided, and here
+those are not the same thing.
+
+## What phase 5 does not close, and why
+
+Stated here rather than discovered later. Each of these is a seam named in the code at the
+point where it stops.
+
+| Not closed | Why | Where it lands |
+|---|---|---|
+| **AC-16** | Twenty proposals decided by a person. The generators now produce a real queue against both reference products, so the only missing input is a person's time | A sitting, not a build step |
+| Opening the pull request for an accepted `ci_change` | SEC-3 wants a scoped app installation with `contents:write`, `pull_requests:write` and a per-tenant repository allowlist; B3 rule 4 forbids pushing to a protected branch. This deployment holds no such credential. The approval and the intended diff are recorded and `_apply_ci_change` says so in its output | US-12, with the credential |
+| Filing the ticket for an accepted `ticket` | Needs a `ticket` role source bound. The decision and the work are recorded | phase 6 |
+| Writing an accepted `eval_case` into the suite | A repository write, behind the same installation. US-1's rule — never write a case into the suite until a human has ticked it — is satisfied by the tick being recorded | with the credential |
+| **AC-36**, `harvested_case_yield` | B6 defines it as measured no sooner than one full eval cycle after acceptance. Two things are missing and only one is code: no production source exists to harvest from, and a cycle has to elapse. **It cannot be closed by building anything** | phase 6 and time |
+| US-1's production half | The harvest collects traces a judge scored low or a user complained about. The cap, the rank and the signals behind it are built and tested; what is missing is something to harvest. Open question 2 is the same question | phase 6 |
+| The critic | Deliberately not in this phase. B3 rule 3 forbids it from ever gating a `clause_change`, a `new_clause` or a `ci_change`, so it cannot be on the path to AC-16 — it scores and routes for display. `confidence` is null until it exists, and the terminal prints `unscored` rather than `0.00`, because a proposal no critic has seen is not a low-confidence proposal | when the queue is long enough that ordering it matters |
+
+## The matrix after phase 5
+
+Nine deferrals remain, down from fifteen. Counted by `tests/test_matrix.py`, which fails
+both on a criterion with no test **and** on a deferral for something that is now covered —
+the second direction is what forced six of these entries to be corrected or removed while
+the steps were being built, including one (`AC-35`) whose recorded reason described a
+criterion that is not AC-35.
+
+| Ref | Phase | Short reason |
+|---|---|---|
+| AC-6 | 6 | the walk is tested; no source produces requirements, decisions or tickets |
+| AC-16 | 5 | the rate is tested; the criterion needs a person |
+| AC-36 | 6 | a production source and a full eval cycle |
+| H10 | 6 | elapsed time on a stalled decision needs a decision source |
+| EC-1 | 6 | deriving clauses from an eval suite is US-9's second bullet |
+| EC-10 | 5 | the structural half is tested; nothing calls a model yet |
+| EC-11 | 6 | a spec-versus-ticket conflict needs a ticket source |
+| US-1 | 6 | the ranking and cap are tested; nothing to harvest from |
+| US-12 | 5 | it opens no pull request |
+
+**Closed during phase 5:** AC-33, AC-34, AC-35, H2, H7, EC-5, EC-6, EC-8, EC-12, US-2,
+US-10.
+
+## Next
+
+**AC-16, which is a sitting rather than a step.** `layer generate` against each onboarded
+product, then `layer proposals list` and decide every one. The band cuts both ways and the
+number lands where it lands: 19 of 20 is a rubber stamp and a failure, 8 of 20 is noise
+(B6, EC-5). Report it wherever it falls.
+
+Then the decision gate from "Beyond phase 3": below 50%, no surface gets built around
+proposals. Above it, phase 4's half-day spike and the open question about whether the
+surface is Dust at all.

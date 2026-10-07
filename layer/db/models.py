@@ -281,7 +281,17 @@ SOURCE_KINDS_OF_OBSERVATION = ("eval", "production")
 #: gate checks must not pick a side: claiming `all_runs` asserts full coverage and hides a
 #: real gap, while claiming `latest_only` manufactures a finding that may not exist.
 ENFORCEMENT_SCOPES = ("all_runs", "latest_only", "latest_shipped", "undetermined")
-PROPOSAL_STATES = ("open", "accepted", "rejected")
+#: Closed, and a CHECK: the decide path and the acceptance rate both branch on it. The
+#: last two are states the **system** reached, not decisions — a human edited the target
+#: under an open proposal (H2), or retention deleted the evidence behind it (H7, EC-8).
+#: They exist because leaving such a proposal `open` keeps it in the acceptance rate and
+#: holds the one-open-per-target index against its own replacement, while marking it
+#: `rejected` would require a `decided_by` and forge an approval record (B5 item 1).
+PROPOSAL_STATES = ("open", "accepted", "rejected", "invalidated", "evidence_expired")
+#: The two a human reached. The acceptance rate's denominator, and nothing else.
+DECIDED_STATES = ("accepted", "rejected")
+#: The two the system reached. In neither the numerator nor the denominator.
+SYSTEM_CLOSED_STATES = ("invalidated", "evidence_expired")
 ROW_STATUSES = ("active", "superseded")
 
 # Open vocabularies, validated in Python so a new one needs no migration (rule R3).
@@ -754,7 +764,14 @@ class Proposal(Base):
         # without a decider, or an open one with a decision, cannot be stored.
         CheckConstraint(
             "(state = 'open' AND decided_by IS NULL AND decided_at IS NULL) OR "
-            "(state <> 'open' AND decided_by IS NOT NULL AND decided_at IS NOT NULL)",
+            "(state IN ('accepted', 'rejected') "
+            " AND decided_by IS NOT NULL AND decided_at IS NOT NULL) OR "
+            # A system-closed proposal must *not* name a decider. Putting one there
+            # would forge an approval record, and putting the system's name there would
+            # make the column unable to answer the only question it exists for.
+            "(state IN ('invalidated', 'evidence_expired') "
+            " AND decided_by IS NULL AND decided_at IS NOT NULL "
+            " AND decision_note IS NOT NULL)",
             name="ck_proposal_decision_record",
         ),
         # B4 item 4: not already open against the same target and field.

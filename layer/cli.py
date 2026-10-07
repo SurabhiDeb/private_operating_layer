@@ -268,11 +268,18 @@ def _generate(args) -> int:
         for proposal in result.proposals:
             print(f"  [{proposal.kind}] {proposal.target}.{proposal.field_name} "
                   f"-> {proposal.new_value}")
+        # Read and deliberately not proposed, with the reason. Distinct from "not looked
+        # at", which is the distinction EC-4 exists to preserve. Grouped by reason: eight
+        # identical paragraphs is how a reader learns to skip this section, and the
+        # section is the honest half of the output.
+        grouped: dict[str, list[str]] = {}
         for item in result.declined:
-            # Read and deliberately not proposed, with the reason. Distinct from
-            # "not looked at", which is the distinction EC-4 exists to preserve.
-            print(f"  declined {item.get('clause_ref') or item['finding']}: "
-                  f"{item['reason']}")
+            grouped.setdefault(item["reason"], []).append(
+                str(item.get("clause_ref") or item["finding"])
+            )
+        for reason, refs in grouped.items():
+            print(f"  declined {', '.join(refs)}")
+            print(f"    {reason}")
         for refusal in result.refusals:
             print(f"  refused: {refusal.reason}")
     return 0
@@ -281,7 +288,13 @@ def _generate(args) -> int:
 def _proposals_list(args) -> int:
     with org_session(args.org) as session:
         product = state.get(session, key=args.product) if args.product else None
-        rows = decisions.queue(session, product=product)
+        if product is not None:
+            closed = decisions.sweep(session, product=product)
+            for state_name, ids in closed.items():
+                if ids:
+                    print(f"{len(ids)} proposal(s) closed as {state_name.replace('_', ' ')} "
+                          f"before this queue was built; neither counts as a decision.")
+        rows = decisions.queue(session, product=product, sweep_first=False)
         if not rows:
             print("no open proposals.")
         for row in rows:
@@ -495,9 +508,14 @@ def _parser() -> argparse.ArgumentParser:
     rate.add_argument("--product")
     rate.set_defaults(handler=_acceptance)
 
-    with_common(sub.add_parser("status")).set_defaults(handler=_status)
+    with_common(
+        sub.add_parser("status", help="where one product stands")
+    ).set_defaults(handler=_status)
 
-    serve = with_common(sub.add_parser("serve", help="step 7: the MCP server"), product=False)
+    serve = with_common(
+        sub.add_parser("serve", help="the stdio MCP server; the decide tools are absent"),
+        product=False,
+    )
     serve.add_argument("--transport", default="stdio",
                        choices=["stdio", "sse", "streamable-http"],
                        help="stdio is the only one phases 1 to 3 use; the others arrive "

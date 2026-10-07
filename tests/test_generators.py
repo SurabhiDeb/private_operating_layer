@@ -589,3 +589,42 @@ def test_every_generated_proposal_can_be_decided(triage):
     report = decisions.acceptance(session, product=product)
     assert report["accepted"] == len(result.proposals)
     assert report["rate"] == 1.0
+
+
+# -- attribution ------------------------------------------------------------------
+
+
+def test_the_layer_is_the_proposer_and_not_the_operator_who_ran_it(triage):
+    """`proposed_by` is the Layer. The operator typed a command; they did not propose
+    anything, and putting their name on it would make a generated proposal look like
+    something they put their name to.
+
+    It also makes `proposed_by == decided_by` unreachable by accident, which is worth
+    having on the one metric the whole product is judged by.
+    """
+    session, product = triage
+    result = generators.generate(session, product=product, actor="ops@example.com")
+    assert result.proposals
+    rows = session.execute(
+        select(Proposal).where(Proposal.product_id == product.id)
+    ).scalars().all()
+    for row in rows:
+        assert row.proposed_by == generators.PROPOSER
+        assert row.proposed_by != "ops@example.com"
+
+
+@pytest.mark.ac("AC-9")
+def test_a_generator_run_is_audited_once_naming_who_triggered_it(triage):
+    """Each proposal has its own creation event. This is the one that answers "why did
+    fourteen of these appear at once, and who asked for them"."""
+    from layer.db.models import AuditEvent
+
+    session, product = triage
+    generators.generate(session, product=product, actor="ops@example.com")
+    events = session.execute(
+        select(AuditEvent).where(AuditEvent.action == generators.GENERATOR_RUN)
+    ).scalars().all()
+    assert len(events) == 1
+    assert events[0].actor == "ops@example.com"
+    assert events[0].subject == f"product:{product.key}"
+    assert events[0].detail["generated"] >= 1

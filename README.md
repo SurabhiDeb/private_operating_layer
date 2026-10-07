@@ -15,32 +15,44 @@ onboarded from its own spec and its own eval sources, with no code change.
 
 ## Status
 
-**Phases 1 to 3 are done — 13 steps of 13.** The read half works end to end: a product can be
-onboarded, interrogated from a terminal or over MCP, and every answer cites records a human can
+**Phases 1 to 3 and phase 5 are done — 17 steps of 17.** Both halves work end to end: a
+product can be onboarded, interrogated from a terminal or over MCP, and the findings turned
+into proposals a named person accepts or rejects. Every answer cites records a human can
 open. See [`PROGRESS.md`](PROGRESS.md) for the plan, what each step did, and what is left.
 
 | Working now | Not built yet |
 |---|---|
-| Multi-tenant schema with provable isolation (Postgres row level security) | The write half: the generators, the critic, and a human deciding proposals |
-| All 13 tables, reversibly migrated, with an append-only audit log | The remaining sources: requirement, decision, ticket, config, production |
-| Refs: the `kind:id` citation scheme and its resolver registry | Dust, or any agent runtime. Phase 4 is one `run(transport=...)` argument |
-| A git source pinned to an immutable commit | |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The critic, which scores and never decides. Deliberately last: it can never gate a spec edit, so it is not on the path to the one metric that matters |
+| All 14 tables, reversibly migrated, with an append-only audit log | The remaining sources: requirement, decision, ticket, config, production |
+| Refs: the `kind:id` citation scheme and its resolver registry | Opening the pull request for an accepted CI change, which needs a scoped GitHub app installation (SEC-3). The approval and the diff are recorded |
+| A git source pinned to an immutable commit | Dust, or any agent runtime. Phase 4 is one `run(transport=...)` argument |
 | The metric engine: reads a number, computes one, or declines to | |
 | Spec, eval and code adapters, with Langfuse as a second transport | |
 | Onboarding: all seven steps, with the binding gate | |
 | Verdicts, via a Wilson interval, degrading when their evidence goes stale | |
 | **All five findings, with resolvable citations** | |
 | **The evidence spine: the individual cases a finding cites** | |
+| **Four generators: findings into ranked, capped proposals** | |
+| **The decide path: accept and reject, by a named person with a role** | |
+| **The proposal acceptance rate, reported against its band in both directions** | |
 | **A stdio MCP server, 20 tools, with the human-only tier absent from it** | |
 | **A CLI: `python -m layer`** | |
-| 558 tests | |
+| 675 tests | |
 
-A product can be onboarded end to end and interrogated. `find_drift`, `find_unenforced` and
-`find_uncovered` reproduce real breaches from committed data, naming the individual cases that
-missed each bar, with every citation resolving to a pinned commit.
-`find_stalled_decisions` and `find_underspecified` refuse by name until their sources exist,
-which is the designed behaviour rather than a gap. What is missing is the half that writes:
-nothing here proposes a change yet except through a tool a human has to call.
+`find_drift`, `find_unenforced` and `find_uncovered` reproduce real breaches from committed
+data, naming the individual cases that missed each bar, with every citation resolving to a
+pinned commit. `find_stalled_decisions` and `find_underspecified` refuse by name until their
+sources exist, which is the designed behaviour rather than a gap.
+
+The write half turns those findings into proposals and stops: a drift becomes a threshold
+change **or** a ticket and never both, an unenforced clause becomes a CI change, a measured
+metric nothing promises becomes a clause to write, and a bar nothing has approached in months
+becomes a candidate for raising. Each one names a single change to a single field, cites
+evidence that resolves, states what happens if it is turned down, and waits. Accepting is
+human-only — absent from the MCP server in any phase, not merely undecorated — and bounded by
+a role: a product manager decides anything, an engineer decides the gate and the eval suite,
+an agent decides nothing. What is missing is the number: twenty proposals decided by a person,
+which needs a person.
 
 ---
 
@@ -57,6 +69,7 @@ clause set, and no built-in knowledge of any product's metric names or file layo
   5  propose bindings, then STOP                Layer proposes, human confirms
   6  first measurement pass -> verdicts         Layer     product becomes live
   7  findings, then proposals                   Layer     read-only findings first
+  8  decide each proposal                       human     by name, bounded by a role
 ```
 
 **Step 5 is the gate the whole design turns on.** Before it, the Layer does not know which
@@ -77,9 +90,18 @@ Five kinds of finding, all plain SQL over what onboarding loaded:
 | `stalled_decision` | A decision that produced no pull request, ticket or spec change |
 | `underspecified` | The eval passes and production is still out of band |
 
-Then proposals: a threshold change, a new clause, a link, an eval case, a CI change. The
-Layer never decides. It proposes, and a human accepts or rejects with the evidence in front
-of them.
+Then proposals: a threshold change, a ticket, a new clause, a link, an eval case, a CI
+change. Each names one change to one field, cites evidence that resolves, states what
+happens if it is turned down, and is meant to be decidable in under a minute.
+
+**The Layer never decides.** Accepting and rejecting are human-only — absent from the MCP
+server in any phase rather than merely undecorated, because a boundary enforced by an
+agent's tool allowlist is not a boundary — and bounded by a role: a product manager decides
+anything, an engineer decides the gate and the eval suite, an agent decides nothing. A
+proposal whose target a human edits meanwhile is closed as invalidated rather than merged
+over their edit, and one whose evidence retention has deleted is closed as
+evidence-expired rather than shown as live with a dead citation. Neither counts as a
+decision, so neither moves the acceptance rate.
 
 ---
 
@@ -150,7 +172,26 @@ cp .env.example .env     # then fill in the two database URLs
 .venv/bin/python -m layer findings --org <id> --as you@example.com triage --citations
 ```
 
-The MCP server arrives at step 9 and does not exist yet; `PROGRESS.md` tracks it.
+```bash
+# 8. The write half. Register who may decide, then turn findings into proposals.
+.venv/bin/python -m layer actor add you@example.com --role pm \
+    --org <id> --as you@example.com
+.venv/bin/python -m layer generate --org <id> --as you@example.com triage
+
+# 9. Decide them. `--as` must resolve to a registered actor here, and the role is checked.
+.venv/bin/python -m layer proposals list   --org <id> --as you@example.com --product triage
+.venv/bin/python -m layer proposals accept --org <id> --as you@example.com <proposal-id>
+.venv/bin/python -m layer proposals reject --org <id> --as you@example.com <proposal-id> \
+    --reason "the bar is right; the product is not"
+
+# The one number the product is judged by, with its band in view.
+.venv/bin/python -m layer proposals acceptance --org <id> --as you@example.com
+```
+
+```bash
+# The MCP server, over stdio. The human-only tools are absent from it, in any phase.
+.venv/bin/python -m layer serve --org <id> --as you@example.com
+```
 
 ---
 
@@ -158,15 +199,17 @@ The MCP server arrives at step 9 and does not exist yet; `PROGRESS.md` tracks it
 
 ```
 layer/
-  core/        config, the org-scoped session, the refusal vocabulary
+  core/        config, the org-scoped session, actors and roles, the refusal vocabulary
   db/          models, migrations, row level security
   refs/        the kind:id citation scheme and its resolver registry
-  adapters/    sources: a pinned git repo today, spec/eval/code next
-  metrics/     the declarative aggregation engine          (step 5)
-  onboarding/  the seven-step state machine                (step 7)
-  verdicts/    state and verdict, via a Wilson interval    (step 8)
-  findings/    the five queries                            (step 8)
-  mcp/         the stdio server                            (step 9)
+  adapters/    sources: spec, eval and code over a pinned git repo, plus Langfuse
+  metrics/     the declarative aggregation engine           (step 5)
+  onboarding/  the seven-step state machine                 (step 7)
+  verdicts/    state and verdict, via a Wilson interval     (step 8)
+  findings/    the five queries and the evidence spine      (steps 8, 10)
+  answers/     the read tier, the write tier, and the human-only decide path
+  proposals/   the generators: findings into ranked proposals  (step 16)
+  mcp/         the stdio server                             (step 12)
 tests/         the suite; tests/fixtures/ is the only place a real product is named
 docs/          EARLYECHO.md, the previous occupant of this file
 operating_layer_main/   the specification, the handoff, and a UI mock
