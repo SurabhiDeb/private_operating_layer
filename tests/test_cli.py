@@ -339,3 +339,160 @@ class TestAttribution:
         named, so it cannot be defaulted."""
         with pytest.raises(SystemExit):
             main(["product", "register", "--as", ACTOR, "wf"])
+
+
+# -- the actor slice, phase 5 step 14 --------------------------------------------
+
+
+def test_actor_add_prints_the_role_it_recorded(org, capsys):
+    assert main(["actor", "add", "pm@example.com", "--role", "pm",
+                 "--org", org, "--as", ACTOR]) == 0
+    assert "pm@example.com: pm" in capsys.readouterr().out
+
+
+def test_actor_list_says_what_each_role_decides(org, capsys):
+    """Printed rather than documented. The operator deciding who to register should not
+    have to read `models.ROLE_DECIDES` to find out what they are granting."""
+    main(["actor", "add", "a@example.com", "--role", "engineer",
+          "--org", org, "--as", ACTOR])
+    main(["actor", "add", "b@example.com", "--role", "agent",
+          "--org", org, "--as", ACTOR])
+    main(["actor", "list", "--org", org, "--as", ACTOR])
+    out = capsys.readouterr().out
+    assert "ci_change" in out and "eval_case" in out
+    assert "decides: nothing" in out
+
+
+def test_actor_list_on_an_empty_org_says_so_rather_than_printing_nothing(org, capsys):
+    """AC-20's habit, applied to this table: an empty state names what is missing."""
+    main(["actor", "list", "--org", org, "--as", ACTOR])
+    assert "cannot be attributed" in capsys.readouterr().out
+
+
+def test_an_unknown_role_is_rejected_by_the_parser_not_the_database(org, capsys):
+    """`choices=` on the argument, so the operator gets the list back immediately
+    rather than a constraint violation from Postgres."""
+    with pytest.raises(SystemExit):
+        main(["actor", "add", "x@example.com", "--role", "admin",
+              "--org", org, "--as", ACTOR])
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_registering_an_actor_is_itself_audited(org):
+    """AC-9. Who may decide is a change worth a record of its own: granting somebody
+    the pm role is granting them every future decision."""
+    from sqlalchemy import select
+
+    from layer.core import audit
+    from layer.core.db import org_session
+    from layer.db.models import AuditEvent
+
+    main(["actor", "add", "pm@example.com", "--role", "pm", "--org", org, "--as", ACTOR])
+    with org_session(org) as session:
+        rows = session.execute(
+            select(AuditEvent).where(AuditEvent.action == audit.ACTOR_REGISTERED)
+        ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].actor == ACTOR
+    assert rows[0].subject == "actor:pm@example.com"
+    assert rows[0].detail["role"] == "pm"
+
+
+# -- the decide path, phase 5 step 15 --------------------------------------------
+
+
+class TestProposals:
+    """The operator's half of US-10. What the terminal prints *is* the review surface in
+    this phase, so the band and the unscored state are tested as output, not as fields."""
+
+    def _with_a_proposal(self, capsys, org, repo) -> str:
+        from layer.answers import writes
+        from layer.core import actors
+        from layer.core.db import org_session
+
+        onboard(capsys, org, repo)
+        run_cli(capsys, "bindings", "confirm", "--org", org, "--as", ACTOR, "wf",
+                "--metric", "accepted_suggestions", "--clause", "WF-4.1")
+        run_cli(capsys, "measure", "--org", org, "--as", ACTOR, "wf")
+        run_cli(capsys, "actor", "add", "pm@example.com", "--role", "pm",
+                "--org", org, "--as", ACTOR)
+        with org_session(org) as session:
+            result = writes.propose_change(
+                session, target="clause:WF-4.1", field="value", new_value="0.95",
+                reason="the recorded runs sit below this bar across the sequence",
+                evidence=["clause:WF-4.1"], actor="generator",
+                if_rejected="the clause stands and the gap stays open",
+            )
+            assert result.shape == "proposal", getattr(result, "reason", result)
+            return result.proposal_id
+
+    def test_the_listing_shows_what_a_reviewer_decides_on(self, capsys, org, repo):
+        self._with_a_proposal(capsys, org, repo)
+        code, out, _ = run_cli(capsys, "proposals", "list", "--org", org, "--as", ACTOR)
+        assert code == 0
+        assert "clause:WF-4.1.value" in out
+        assert "->  0.95" in out
+        assert "if rejected:" in out
+        assert "evidence: clause:WF-4.1" in out
+        # Null is unscored, never 0.00. Every proposal is unscored until the critic exists.
+        assert "confidence: unscored" in out
+
+    def test_an_empty_queue_says_so(self, capsys, org, repo):
+        onboard(capsys, org, repo)
+        code, out, _ = run_cli(capsys, "proposals", "list", "--org", org, "--as", ACTOR)
+        assert code == 0
+        assert "no open proposals" in out
+
+    def test_accepting_prints_the_version_it_produced(self, capsys, org, repo):
+        proposal = self._with_a_proposal(capsys, org, repo)
+        code, out, _ = run_cli(capsys, "proposals", "accept", "--org", org,
+                               "--as", "pm@example.com", proposal)
+        assert code == 0
+        assert "accepted: clause:WF-4.1.value" in out
+        assert "WF-4.1 is now at version 2" in out
+
+    def test_rejecting_without_a_reason_is_refused_by_the_parser(self, capsys, org, repo):
+        proposal = self._with_a_proposal(capsys, org, repo)
+        with pytest.raises(SystemExit):
+            run_cli(capsys, "proposals", "reject", "--org", org,
+                    "--as", "pm@example.com", proposal)
+
+    def test_an_unregistered_decider_reaches_the_operator_as_a_refusal(
+        self, capsys, org, repo
+    ):
+        """Not a traceback. `--as` is attribution everywhere else and has to resolve
+        here, and the message names the command that fixes it."""
+        proposal = self._with_a_proposal(capsys, org, repo)
+        code, _, err = run_cli(capsys, "proposals", "accept", "--org", org,
+                               "--as", "nobody@example.com", proposal)
+        assert code == 1
+        assert "refused:" in err
+        assert "layer actor add" in err
+
+    def test_deciding_twice_tells_the_second_person_who_was_first(self, capsys, org, repo):
+        proposal = self._with_a_proposal(capsys, org, repo)
+        run_cli(capsys, "proposals", "accept", "--org", org,
+                "--as", "pm@example.com", proposal)
+        code, _, err = run_cli(capsys, "proposals", "reject", "--org", org,
+                               "--as", "pm@example.com", proposal, "--reason", "changed my mind")
+        assert code == 1
+        assert "already accepted by pm@example.com" in err
+
+    def test_the_acceptance_rate_is_printed_with_its_band(self, capsys, org, repo):
+        """B6's core health metric. Printed with the band because a bare percentage
+        invites the reader to treat higher as better, and above 85% is a failure."""
+        proposal = self._with_a_proposal(capsys, org, repo)
+        code, out, _ = run_cli(capsys, "proposals", "acceptance", "--org", org,
+                               "--as", ACTOR)
+        assert code == 0
+        assert "unmeasured" in out
+        assert "band 50% to 85%" in out
+
+        run_cli(capsys, "proposals", "accept", "--org", org,
+                "--as", "pm@example.com", proposal)
+        code, out, _ = run_cli(capsys, "proposals", "acceptance", "--org", org,
+                               "--as", ACTOR)
+        assert "acceptance: 100%" in out
+        # One decision is arithmetic, not a measurement. AC-16 asks for twenty.
+        assert "[provisional]" in out
+        assert "AC-16" in out

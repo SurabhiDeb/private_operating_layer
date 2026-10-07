@@ -1849,7 +1849,8 @@ the order and the reasoning are in "Beyond phase 3" below, and the per-criterion
 "What is left, at a glance" above.
 
 **Phase 5, the write half**, which is where the one metric that matters has never been
-measured. It needs three things the plan does not yet carry, written up below: an actor model
+measured. **Planned in full at the end of this file** — "Phase 5 — the write half. The plan,
+against the spec." — as steps 14 to 17, with what each one closes and what it cannot. It needs three things the plan does not yet carry, written up below: an actor model
 that is identity rather than authentication, the generators that produce proposals at all,
 and the critic that scores them and never decides. AC-16 is the gate — twenty proposals
 decided by a person — and it cannot be reached without a person, so the number lands where it
@@ -2021,3 +2022,212 @@ the mock in `operating_layer_main/Operating Layer.html`. Dust earns its rent for
 agent loop, the scheduled triggers, per-tool approval and the multiplayer surfaces — not for
 a screen. If what is wanted is a screen, the Layer's own UI is likely cheaper than the
 integration. Open question 13 is the same question asked from the other end.
+
+---
+
+# Phase 5 — the write half. The plan, against the spec.
+
+**Why this is next, in one line:** AC-16 is the only metric in B6 that has never been
+measured, the route people assumed exists does not (the 15 proposals in
+`Operating Layer.html` are hand-written, not generated), and PRD D2 forbids building a
+surface around proposals before the number is known.
+
+**What phases 1–3 already left in place**, so this is smaller than it looks:
+
+| Already built | Where |
+|---|---|
+| The proposal container, with B4 enforced *before* a row exists | `layer/answers/writes.py`, 528 lines |
+| `proposal.target_version`, which is H2's whole mechanism | `layer/db/models.py:769` |
+| A CHECK making the approval record structural: `open` implies no decider, decided implies both | `ck_proposal_decision_record` |
+| One-open-per-target as a partial unique index, which is B4 item 4 | `uq_proposal_one_open_per_target` |
+| `--as <email>` on every CLI command already | `layer/cli.py:280` |
+| `harvest_cap` on `product`, default 20, with a CHECK | `layer/db/models.py:123` |
+| A human-only decision precedent to copy: `bindings.decide` | `layer/onboarding/bindings.py:140` |
+| Retention and staleness machinery H7 and EC-8 need | steps 10 and 11 |
+
+So the schema is nearly there. What is missing is an actor with a role, a decide path, the
+generators, and the four hard cases that make the write half honest.
+
+## The build order
+
+Four steps. The critic is deliberately **not** among them — see the note at the end.
+
+| # | Step | Closes |
+|---|---|---|
+| 14 | The actor: a table, a role, and `--as` that resolves | the precondition for `decided_by` |
+| 15 | The decide path: accept and reject, human-only, with an approval record | US-10, AC-9 extended to decisions, EC-5 |
+| 16 | The generators: findings into proposals | US-2, US-3, EC-12, AC-34, AC-35, and the input to AC-16 |
+| 17 | The hard cases: EC-6, H2, H7 and EC-8 | the reason the write half is trustworthy |
+| — | **AC-16** | not a build step. ~20 proposals, decided by a person |
+
+---
+
+## Step 14 — The actor. A table, a role, and an `--as` that resolves.
+
+**What it must achieve.** `decided_by` cannot exist without an actor, and the role rules
+cannot be enforced against a free-text string. AC-16 records who decided; B11 rule 7 draws
+the line at identity, not authentication, so there are no sessions and no tokens here.
+
+**The table is `actor`, not `user`.** `user` is reserved in SQL: the table would need
+quoting at every call site forever and the first unquoted one is a runtime error rather than
+a test failure. `audit_event.actor` already uses the word.
+
+**The role set is closed and therefore gets a CHECK**, per R3 — the Layer branches on it:
+
+| Role | Decides |
+|---|---|
+| `pm` | every proposal kind. PRD A2's primary user |
+| `engineer` | `ci_change` and `eval_case` only. A2's secondary user, who owns the gate and the suite |
+| `agent` | nothing, ever. Not a narrower role — a role for which the decide path refuses |
+
+**`--as` keeps its present meaning everywhere except the decide path.** Elsewhere it is
+attribution the server cannot verify, which is exactly what B11 rule 7 describes, and
+tightening it would break onboarding for no gain. On the decide path it **must** resolve to
+an `actor` row with a role, because an unresolvable decider makes the role rule
+unenforceable and `decided_by` a decoration.
+
+**Migration 6** adds `actor` and names `("actor",)` explicitly in the RLS call — never the
+live `TENANT_TABLES`, which is the bug `layer/db/rls.py:24` records. Unique on
+`(org_id, email)`: H11's reasoning applies to people too, since two tenants may employ the
+same contractor.
+
+**Verified by:** the role matrix as a table-driven test, an agent refused on every kind, an
+unresolvable actor refused, and a cross-tenant actor invisible — which is AC-8 over one more
+table.
+
+---
+
+## Step 15 — The decide path. Accept and reject, human-only, with an approval record.
+
+**What it must achieve.** US-10, which is the accountable person's story: present target,
+old value, new value, reason and evidence; record who decided, when, and **what evidence was
+displayed**; record the resulting clause version on accept; and apply nothing that lacks an
+approval record.
+
+**It lives in a new module, not in `writes.py`.** `layer/answers/decisions.py`. The
+separation is structural rather than tidy: `writes.py` is the tier the MCP server imports,
+so a human-only function that is not in it cannot be exposed by a careless decorator. AC-31
+tests the served list; this makes the served list hard to get wrong in the first place.
+
+**What accept does, per kind.** This is where the step's real content is:
+
+| Kind | On accept |
+|---|---|
+| `clause_change` | Supersede the clause row, increment `version`, keep `ref` and every link intact. That is H3's mechanism, already built for rewording |
+| `new_clause` | Create it, `state: provisional` — the bar has not been measured, H9 |
+| `link` | Create the edge |
+| `eval_case` | Stage the case with its provenance. See the limit below |
+| `ci_change` | **Records the approval and stores the intended diff. It does not open the pull request.** SEC-3 requires a scoped app installation with `contents:write` and `pull_requests:write` and a per-tenant repository allowlist, and this project holds no such credential. Declaring the seam now is better than discovering it inside step 16 |
+
+That limit is stated here deliberately: US-12 and US-3 close for everything except the act of
+opening the PR, and the plan should not read as though they close entirely.
+
+**`accept` is not the only write.** Every decision produces an `audit_event` carrying the
+evidence as displayed, so the log answers "what did they see" and not only "what did they
+click". B5 item 1 ranks a write without an approval record first among unacceptable failures.
+
+**The acceptance rate is computed here, not in a spreadsheet**, and surfaced against its band
+in both directions — below 50% noise, above 85% a rubber stamp (B6, EC-5). A `proposals`
+CLI listing shows the queue in B4's shape, which is to say decidable in under sixty seconds.
+
+**Verified by:** a decided proposal with no actor refused at the database rather than in
+Python; the role matrix end to end; an audit event per decision; a clause version recorded on
+accept; and the rate reported against the band when it falls outside it.
+
+---
+
+## Step 16 — The generators. Findings into proposals.
+
+**What it must achieve.** Proposals have to originate somewhere, and neither document
+specifies it. They are thin over phase 2's findings — the expensive part was the findings,
+which exist.
+
+| Finding | Proposal | Rule |
+|---|---|---|
+| `drift` | `clause_change` **or** a ticket, never both in one proposal (US-2) | Below |
+| `unenforced` | `ci_change`, including H14's narrowed scope — the gate's **run set** is the change, not its threshold |
+| `uncovered` | `new_clause` where the metric has no clause (H16), or a `link` where the clause exists unbound |
+| EC-12 | `clause_change` raising a bar comfortably exceeded for months. "The one teams never build" |
+| `underspecified` | **Nothing.** H8 requires reporting an under-specified requirement; what proposal that justifies is not specified, and inventing one here would be the Layer deciding what the spec should say |
+
+**The drift rule, written down so it is not left to taste.** A threshold change and a ticket
+are opposite claims about who is wrong — the spec or the product — and US-2 forbids hedging
+by proposing both. The rule: where the bar is `provisional` and no run ever cleared it, the
+bar is the unjustified artefact (H9) and the proposal is a `clause_change`; where the bar is
+`measured` or `ratified` and the history cleared it before, the product moved and the
+proposal is a ticket. Deterministic, and a human can disagree with it.
+
+**Every generated proposal goes through the existing B4 gate rather than a new one.**
+`writes.py` already refuses evidence that does not resolve, requires `if_rejected`, and lets
+the partial unique index refuse a duplicate. A second gate would drift from the first.
+
+**AC-34 and AC-35 need `proposal.rank` and the signals behind it**, so migration 7 adds
+`rank` and `rank_signals`. A per-run cap reads `harvest_cap` from the product, and everything
+beyond the cap is retained with its rank and stays queryable — the cap is a priority order,
+never a deletion (US-1). No ranking score is labelled importance or severity: it is a queue
+order (AC-35, explicitly).
+
+**What this step cannot close, and why — stated now rather than discovered later.** The
+`eval_case` generator in US-1's full sense harvests *production* traces, and there is no
+production source: `~/Desktop/chatbot-lab` holds two products with specs, runs and gates and
+no production traffic, and open question 2 (which production metrics source, and does it
+expose MCP) is unresolved. So **AC-36 cannot be closed in phase 5 at all** — it is
+retrospective by definition, "measured no sooner than one full eval cycle after acceptance" —
+and the production half of US-1 waits on a source. AC-33 and AC-34 close against the
+generator run's own cap, which is the same mechanism the harvest will use.
+
+**Verified by:** generation against both reference products, not one (a Layer that generates
+for one fixture has been fitted to it); zero proposals for a product that is not `live`
+(AC-17) and for a clean install (AC-20); the causal-verb grep over generated reasons;
+and a generator that raises mid-run writing nothing, which is EC-10's fail-closed in the
+deterministic case.
+
+---
+
+## Step 17 — The hard cases. Where the write half earns trust.
+
+**EC-6, two people decide at once.** First decision wins; the second is told what happened
+and by whom. Implemented as a conditional update — `WHERE state = 'open'` — and zero rows
+affected is the refusal, which then names `decided_by`. Not a row lock: a lock held across a
+human's deliberation is a lock held for minutes.
+
+**H2, a human edits the spec under an open proposal.** Human text wins and the proposal is
+invalidated rather than merged over. `target_version` is already stored, so accept compares
+it against the clause's current version and refuses on a mismatch.
+
+**H7 and EC-8, retention deleted the evidence.** The proposal is marked evidence-expired and
+its citation points at the run rather than the dead trace (B3 rule 11). Reuses step 10 and
+11's machinery over `source.config["trace_retention"]`; no live call, per AC-24.
+
+**Both of those need a terminal state that is not a decision, and this is the one real
+schema question in phase 5.** `PROPOSAL_STATES` is `("open", "accepted", "rejected")` and
+`ck_proposal_decision_record` requires a decider for anything not `open`. An invalidated
+proposal has no decider, and setting one would forge an approval record — the first item in
+B5. Leaving it `open` is worse still: it would sit in the acceptance-rate denominator and
+hold the one-open-per-target index against its own replacement. So migration 7 adds
+`invalidated` and `evidence_expired` and amends the CHECK to three cases: `open` has no
+decider, `accepted` and `rejected` require one, and the two system-closed states require a
+null decider and a stated reason.
+
+**Which fixes the acceptance rate's denominator before it is ever reported.** A proposal the
+system closed was never decided by anyone, so it belongs in neither numerator nor
+denominator: the rate is `accepted / (accepted + rejected)`. Getting this wrong would make
+B6's single most important number quietly depend on how much evidence had expired.
+
+---
+
+## Then AC-16, which is not a build step
+
+Twenty-odd real proposals about real products, decided by a person. The band cuts both ways
+and the number lands where it lands: 19 of 20 is a rubber stamp and a failure, 8 of 20 is
+noise (B6, EC-5). Generating twenty trivially-correct proposals scores above the band, so it
+cannot be gamed. Report it wherever it falls.
+
+## Why the critic is not a step here
+
+It was in the earlier phase 5 sketch and it is deliberately not in this order. B3 rule 3
+forbids it from ever gating a `clause_change`, a `new_clause` or a `ci_change`, so it cannot
+be on the path to AC-16 — it scores and routes for display. The `confidence` and `critic`
+columns stay null until it exists, and a null must not render as low confidence, which is
+the one thing the display has to get right in the meantime. It slots after step 16 whenever
+the queue is long enough that ordering it matters.

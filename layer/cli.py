@@ -17,11 +17,13 @@ import uuid
 
 from sqlalchemy import select
 
-from layer.core import freshness
+from layer.core import actors, audit, freshness
 from layer.core.db import org_session, unscoped_session
 from layer.core.durations import format_duration, parse_duration
 from layer.core.errors import LayerError, Unreadable
-from layer.db.models import Org, Product
+from layer.db import models
+from layer.db.models import ACTOR_ROLES, Actor, Org, Product
+from layer.answers import decisions
 from layer.findings import queries
 from layer.onboarding import bindings as binding_gate
 from layer.onboarding import run, state
@@ -59,6 +61,33 @@ def _org_list(args) -> int:
     with unscoped_session() as session:
         for org in session.execute(select(Org).order_by(Org.slug)).scalars():
             print(f"{org.slug:24} {org.id}")
+    return 0
+
+
+def _actor_add(args) -> int:
+    with org_session(args.org) as session:
+        row = actors.add(
+            session, org_id=uuid.UUID(args.org), email=args.email,
+            role=args.role, name=args.name,
+        )
+        audit.record(
+            session, org_id=row.org_id, actor=args.actor,
+            action=audit.ACTOR_REGISTERED, subject=f"actor:{row.email}",
+            detail={"role": row.role},
+        )
+        print(f"{row.email}: {row.role}")
+    return 0
+
+
+def _actor_list(args) -> int:
+    with org_session(args.org) as session:
+        rows = session.execute(select(Actor).order_by(Actor.email)).scalars().all()
+        if not rows:
+            print("no actors registered. A decision cannot be attributed until one is.")
+            return 0
+        for row in rows:
+            decides = ", ".join(models.ROLE_DECIDES[row.role]) or "nothing"
+            print(f"{row.email:<40} {row.role:<10} decides: {decides}")
     return 0
 
 
@@ -223,6 +252,77 @@ def _findings(args) -> int:
     return 0
 
 
+def _proposals_list(args) -> int:
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product) if args.product else None
+        rows = decisions.queue(session, product=product)
+        if not rows:
+            print("no open proposals.")
+        for row in rows:
+            print(f"{row['id']}  {row['kind']}  {row['target']}.{row['field']}")
+            old_value = "—" if row["old_value"] is None else row["old_value"]
+            print(f"    {old_value}  ->  {row['new_value']}")
+            print(f"    {row['reason']}")
+            print(f"    if rejected: {row['if_rejected']}")
+            print(f"    evidence: {', '.join(row['evidence']) or 'none'}")
+            # A proposal no critic has scored is unscored, never zero. Until the critic
+            # exists every one of these is null, and rendering that as 0.0 would read as
+            # a confident judgement that the proposal is worthless.
+            score = "unscored" if row["confidence"] is None else f"{row['confidence']:.2f}"
+            print(f"    confidence: {score}    proposed by {row['proposed_by']}")
+            print()
+        _print_acceptance(decisions.acceptance(session, product=product))
+    return 0
+
+
+def _proposal_decide(args, decision: str) -> int:
+    with org_session(args.org) as session:
+        if decision == "accept":
+            result = decisions.accept(
+                session, proposal_id=args.id, by=args.actor, note=args.note
+            )
+        else:
+            result = decisions.reject(
+                session, proposal_id=args.id, by=args.actor, reason=args.reason
+            )
+        if result["shape"] == "refusal":
+            print(f"refused: {result['reason']}", file=sys.stderr)
+            return 1
+        print(f"{result['decision']}: {result['proposal']['target']}"
+              f".{result['proposal']['field']}  (by {result['decided_by']})")
+        applied = result.get("applied") or {}
+        if applied.get("version"):
+            print(f"  {applied['clause_ref']} is now at version {applied['version']}")
+        if applied.get("link"):
+            print(f"  {applied['link']}")
+        if applied.get("pending"):
+            print(f"  not done: {applied['pending']}")
+    return 0
+
+
+def _acceptance(args) -> int:
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product) if args.product else None
+        _print_acceptance(decisions.acceptance(session, product=product))
+    return 0
+
+
+def _print_acceptance(report: dict) -> None:
+    """The one number B6 calls the core product health metric, with its band in view.
+
+    Printed with the band rather than alone, because a bare percentage invites the reader
+    to treat higher as better — and above 85% is a failure, not a win.
+    """
+    low, high = report["band"]
+    rate = "unmeasured" if report["rate"] is None else f"{report['rate'] * 100:.0f}%"
+    print(f"acceptance: {rate}  (band {low:.0%} to {high:.0%})  [{report['verdict']}]")
+    print(f"  {report['summary']}")
+    if report["invalidated"] or report["evidence_expired"]:
+        print(f"  excluded from the rate: {report['invalidated']} invalidated, "
+              f"{report['evidence_expired']} evidence-expired — neither was decided "
+              f"by anyone.")
+
+
 def _serve(args) -> int:
     """Serve the MCP tool surface over stdio.
 
@@ -290,6 +390,16 @@ def _parser() -> argparse.ArgumentParser:
     create.set_defaults(handler=_org_create)
     org.add_parser("list").set_defaults(handler=_org_list)
 
+    actor = sub.add_parser("actor", help="who may decide").add_subparsers(dest="actor_command")
+    add_actor = with_common(actor.add_parser("add"), product=False)
+    add_actor.add_argument("email")
+    add_actor.add_argument("--role", required=True, choices=list(ACTOR_ROLES),
+                           help="pm decides everything; engineer decides ci_change and "
+                                "eval_case; agent decides nothing")
+    add_actor.add_argument("--name")
+    add_actor.set_defaults(handler=_actor_add)
+    with_common(actor.add_parser("list"), product=False).set_defaults(handler=_actor_list)
+
     product = sub.add_parser("product", help="step 1").add_subparsers(dest="product_command")
     register = with_common(product.add_parser("register"), product=False)
     register.add_argument("key")
@@ -333,6 +443,28 @@ def _parser() -> argparse.ArgumentParser:
     findings.add_argument("--citations", action="store_true",
                           help="print the resolved url for every piece of evidence")
     findings.set_defaults(handler=_findings)
+    proposals = sub.add_parser(
+        "proposals", help="the write half: what is waiting on a human"
+    ).add_subparsers(dest="proposals_command")
+    listing = with_common(proposals.add_parser("list"), product=False)
+    listing.add_argument("--product", help="one product, or every product in the org")
+    listing.set_defaults(handler=_proposals_list)
+
+    accept = with_common(proposals.add_parser("accept"), product=False)
+    accept.add_argument("id")
+    accept.add_argument("--note")
+    accept.set_defaults(handler=lambda a: _proposal_decide(a, "accept"))
+
+    reject = with_common(proposals.add_parser("reject"), product=False)
+    reject.add_argument("id")
+    reject.add_argument("--reason", required=True,
+                        help="required: rejecting is a decision, not a deferral")
+    reject.set_defaults(handler=lambda a: _proposal_decide(a, "reject"))
+
+    rate = with_common(proposals.add_parser("acceptance"), product=False)
+    rate.add_argument("--product")
+    rate.set_defaults(handler=_acceptance)
+
     with_common(sub.add_parser("status")).set_defaults(handler=_status)
 
     serve = with_common(sub.add_parser("serve", help="step 7: the MCP server"), product=False)

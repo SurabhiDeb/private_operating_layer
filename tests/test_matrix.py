@@ -35,16 +35,17 @@ DEFERRED: dict[str, tuple[str, str]] = {
     "AC-6": ("phase 6", "the walk is tested over a six-link chain in tests/test_mcp.py; "
                         "no bindable source produces requirements, decisions or tickets, "
                         "so a real product's chain cannot be complete yet"),
-    "AC-16": ("phase 5", "twenty proposals decided by a person. Needs the decision flow "
-                         "and a human's time; the number has to land where it lands"),
+    "AC-16": ("phase 5", "the rate is tested: the arithmetic, both edges of B6's band, "
+                         "and the distinction between unmeasured and zero. What is not "
+                         "tested, and cannot be, is the criterion itself — twenty real "
+                         "proposals decided by a person. That needs the generators and a "
+                         "human's time, and the number has to land where it lands"),
     "AC-34": ("phase 5", "proposal.rank and the signals behind it, which the harvest "
                          "generator produces"),
     "AC-35": ("phase 5", "a harvested case surviving into an eval suite with its "
                          "provenance"),
     "AC-36": ("phase 5", "harvested_case_yield over a full eval cycle"),
     # -- hard cases --------------------------------------------------------------
-    "H2": ("phase 5", "the detection is tested; invalidating an open proposal when a "
-                      "human edits its target is part of the decision flow"),
     "H7": ("phase 5", "the trace expiry is tested; marking a proposal evidence-expired "
                       "needs the proposal lifecycle"),
     "H10": ("phase 6", "the refusal is tested; elapsed time on a stalled decision needs "
@@ -52,8 +53,6 @@ DEFERRED: dict[str, tuple[str, str]] = {
     # -- edge cases --------------------------------------------------------------
     "EC-1": ("phase 6", "the refusal is tested; deriving clauses from an eval suite and "
                         "the pattern defaults is US-9's second bullet and is not built"),
-    "EC-5": ("phase 5", "the acceptance rate against its band, which needs decided "
-                        "proposals to have a rate at all"),
     "EC-8": ("phase 5", "the citation rule is tested; the evidence-expired state belongs "
                         "to the proposal lifecycle"),
     "EC-10": ("phase 5", "failing closed when the model provider is unavailable. Nothing "
@@ -67,8 +66,6 @@ DEFERRED: dict[str, tuple[str, str]] = {
                         "story is the write half"),
     "US-2": ("phase 5", "comparing a run against its clause is tested through drift; "
                         "proposing a threshold change or a ticket needs the generators"),
-    "US-10": ("phase 5", "the reviewer's story. Needs accept and reject, which are "
-                         "human-only and have no surface yet"),
     "US-12": ("phase 5", "every pull request the Layer opens. It opens none yet"),
 }
 

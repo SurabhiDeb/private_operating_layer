@@ -20,6 +20,7 @@ from layer.db.models import AuditEvent
 
 #: Actions used by onboarding. Free-form strings rather than an enum, for the same reason
 #: `source.kind` is: a new capability should not need a migration to be auditable.
+ACTOR_REGISTERED = "actor_registered"
 PRODUCT_REGISTERED = "product_registered"
 SOURCE_BOUND = "source_bound"
 SPEC_IMPORTED = "spec_imported"

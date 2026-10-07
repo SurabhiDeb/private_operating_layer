@@ -50,6 +50,21 @@ SOURCE_STATUSES = ("healthy", "overdue", "failing", "paused")
 #: PRD B2's `case_result.outcome`. Closed: the counts drive drift detection, so a fifth
 #: value would silently change what `runs_missed` means.
 CASE_OUTCOMES = ("pass", "fail", "error", "skipped")
+#: PRD A2's two users, plus the thing that must never decide. Closed, and a CHECK,
+#: because the decide path branches on it: `agent` is not a narrower set of
+#: permissions but a role for which every decision refuses. B3 rule 1 and AC-31 are
+#: both this rule stated at a different layer.
+ACTOR_ROLES = ("pm", "engineer", "agent")
+#: Which proposal kinds each role may decide. PRD A2: the primary user is the AI
+#: product manager, who owns the definition of correct; the secondary is the engineer
+#: who owns the eval suite and the CI gate, and whose authority stops there. An
+#: engineer accepting a `clause_change` would be editing the spec through the side
+#: door, which is the move US-10 exists to prevent.
+ROLE_DECIDES: dict[str, tuple[str, ...]] = {
+    "pm": ("clause_change", "new_clause", "link", "eval_case", "ci_change"),
+    "engineer": ("ci_change", "eval_case"),
+    "agent": (),
+}
 
 # Open vocabularies, validated in Python so a new one needs no migration.
 KNOWN_SOURCE_KINDS = (
@@ -807,9 +822,47 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = _ts()
 
 
+class Actor(Base):
+    """A person the Layer can attribute a decision to, and the role that bounds it.
+
+    **This is identity, not authentication**, and the distinction is PRD B11 rule 7's.
+    There is no password column, no session and no token: a write is attributed to an
+    actor the server cannot verify, and verifying it arrives with the HTTP transport.
+    What this table buys is the thing AC-16 cannot be measured without — a
+    `decided_by` that resolves to someone with a role — and the role rules in
+    `ROLE_DECIDES`, which cannot be enforced against a free-text string.
+
+    **The table is `actor` rather than `user` because `user` is reserved in SQL.** A
+    table by that name needs quoting at every call site for the rest of the project's
+    life, and the first unquoted reference fails at runtime rather than in a test.
+    `audit_event.actor` already uses the word.
+
+    **Unique per org, not globally.** H11's reasoning about clause refs applies to
+    people: two tenants may employ the same contractor, and one of them must not
+    learn that from a uniqueness violation.
+    """
+
+    __tablename__ = "actor"
+    __table_args__ = (
+        UniqueConstraint("org_id", "email", name="uq_actor_org_email"),
+        CheckConstraint("role IN " + str(ACTOR_ROLES), name="ck_actor_role"),
+        Index("ix_actor_org", "org_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("org.id", ondelete="CASCADE"), nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = _ts()
+
+
 #: Every tenant table, in dependency order. Row level security is applied to each.
 #: `org` is absent deliberately: it is the registry of tenants, not tenant content.
 TENANT_TABLES = (
     "product", "source", "binding", "clause", "clause_identity", "observation",
     "case_result", "enforcement_fact", "entity", "proposal", "link", "audit_event",
+    "actor",
 )
