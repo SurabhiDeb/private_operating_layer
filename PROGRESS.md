@@ -2521,16 +2521,75 @@ extraction as a first-class finding — rather than silently producing a confide
 clause — is a build item of its own, and guessing at it inside a sitting is how the first
 round of noise was made. What exists today is this record and one undeclared clause.
 
-## Next
+## Round two is built but not sat, and it is 11 proposals, not 21
 
-1. **Re-run the sitting.** The queue is now generated against 22 declarations instead of
-   none, so it no longer asks for gates on monthly budgets, and the drift rule no longer
-   offers a number. Whatever that rate is, it is the first one that measures the Layer
-   rather than the gap. It wants a fresh database, because the 47.6% round is a record
-   worth keeping intact.
-2. **The spec importer's confidence.** PD-5.7 above. An extraction the importer is not
-   sure of should arrive as a finding a human rules on, which is the same shape as every
-   other gate in this system.
-3. **Then the gate from "Beyond phase 3" again**, against the new number. Phase 4's
-   half-day spike and the open question about whether the surface is Dust at all stay
-   where they are until it lands.
+**`./sitting-setup.sh <database-name>` does the whole setup from nothing** and decides
+nothing. It creates the database, migrates it, onboards both reference products through
+the CLI, confirms the four bindings, declares the 22 gate intents, scans, measures and
+generates. Run end to end against a throwaway database on 8 October 2026 and verified, so
+this is not a recipe that has only been read.
+
+It takes a database name because a sitting needs one of its own, for two reasons worth
+keeping in view: `tests/conftest.py` truncates `org CASCADE` after every test, so a
+sitting in `.env`'s database dies at the next `pytest` (which is how the first one was
+lost mid-way); and `proposals acceptance` counts every decided proposal in the org, so
+generating round two beside a decided round one makes both numbers meaningless.
+
+**The number that matters, before anybody sits down: the queue is 11.** Five on the
+classifier product, six on the policy product, down from 21.
+
+| | |
+|---|---|
+| `ci_change` on an existing gate | the narrowed run set (H14), and the `xfail`-ed check (AC-15) |
+| `ci_change` where a bar is declared gateable and nothing checks it | TRI-11.4, PD-8.1, PD-8.5, PD-8.6, PD-8.8 |
+| `ticket` | TRI-11.1, TRI-11.2, TRI-11.5 — bars the record has cleared before and is breaching now |
+| `clause_change` | PD-8.8 `state: measured -> provisional`, carrying **no number**, which is the second finding working |
+| `new_clause` | the policy product's headline metric, which no clause promises (H16) |
+
+**So round two cannot close AC-16 on these two products**, because AC-16 wants at least
+twenty proposals decided by a person and there are eleven. That is not a regression: ten
+of the twenty-one were noise the operator had to clear by hand, and they are gone. It
+does mean the next sitting needs a third product, and `tests/fixtures/` already holds a
+third specification written in a different style — which is what AC-21 and PRD C2's "at
+least two independently onboarded products" were pointing at all along.
+
+Worth saying plainly: a queue of 11 where most are right is a different problem from a
+queue of 21 where half are noise, and it is the better problem. But a rate measured over
+11 is not AC-16's rate.
+
+## Pick up here
+
+Branch `layer-phase-1-3`, four commits deep today, **698 passed** on the whole suite
+(`.venv/bin/python -m pytest`, about 4m30s).
+
+| Commit | What |
+|---|---|
+| `5d0ed9f` | the sitting set up, and four defects setting it up found |
+| `771aeb5` | AC-16: 10 accepted, 11 rejected, 47.6%, below the band |
+| `5d13076` | gate intent: whether a stated bar is one a build may fail on |
+| `f2d2a58` | the Layer proposes no number for a bar nobody ever met |
+| `0a7f0c5` | both findings, the declarations, and the third finding recorded |
+
+**Databases.** `layer` is the suite's and is emptied by it. **`layer_ac16` holds round
+one and must not be dropped**: org `8441fd41-3dd0-4b3a-9c6a-9eed5ec6a561`, 21 decided
+proposals, the 47.6%, and the 22 declarations. It is the evidence for AC-16's entry in
+`tests/test_matrix.py`.
+
+**Scripts in the repo, all of them run rather than drafted.** `sitting-setup.sh` builds a
+sitting. `ac16-sitting.sh` is round one's decisions as taken. `gate-declarations.sh` is
+the 23 declarations as made, against round one's org.
+
+**The three things open, in order.**
+
+1. **A third product, then sit.** `./sitting-setup.sh layer_ac16_round2`, then onboard the
+   third fixture specification beside the two reference products, then decide every
+   proposal. Twenty is the bar and the band cuts both ways; report the number wherever it
+   lands (EC-5).
+2. **The spec importer's confidence**, which PD-5.7 above is the case for. An extraction
+   the importer is not sure of should arrive as a finding a human rules on, the same shape
+   as every other gate here. Today it silently produces a confident wrong clause, and an
+   inverted direction is the one defect class that reads as good news.
+3. **Then the gate from "Beyond phase 3" again**, against whatever the new rate is. Phase 4
+   is still one `run(transport=...)` argument plus a half-day spike, and the open question
+   about whether the surface is Dust at all is still open. Neither moves until a number
+   over twenty proposals exists.
