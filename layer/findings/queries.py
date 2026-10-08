@@ -120,6 +120,10 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
             continue
 
         worst = _worst(bar.clause, breaching)
+        # Over every run, not only the breaching ones: where a bar was never cleared the
+        # two sets are the same, and where it was, the best run is the one that cleared
+        # it and is the more honest answer to "how close does this get".
+        best = _best(bar.clause, rows)
         latest = rows[-1]
         #: EC-3: "no drift claims from a single point". A breach in the only run on
         #: record is a fact and is reported, but "missed in 1 of 1 runs, worst 80%" is a
@@ -156,6 +160,8 @@ def find_drift(session: Session, *, product: Product, registry=None) -> FindingS
                 "observed": latest.value,
                 "worst": worst.value,
                 "worst_run": worst.run_id,
+                "best": best.value,
+                "best_run": best.run_id,
                 "runs_missed": len(breaching),
                 "runs_total": len(rows),
                 "single_point": single_point,
@@ -747,6 +753,22 @@ def _worst(clause: Clause, rows: list[Observation]) -> Observation:
         middle = (clause.value + clause.value_high) / 2
         return max(rows, key=lambda r: abs(r.value - middle))
     return min(rows, key=lambda r: r.value)
+
+
+def _best(clause: Clause, rows: list[Observation]) -> Observation:
+    """The run that came closest to the bar. `_worst` by the opposite comparison.
+
+    Reported because "no run reached it" and "no run came near it" ask different things
+    of a reader. A no-tolerance bar at 100% that four runs reached 90.9% is a product
+    some way off its promise; the same bar whose best run is 45.5% is a different
+    conversation, and the two are indistinguishable from `worst` alone.
+    """
+    if clause.comparator == "<=":
+        return min(rows, key=lambda r: r.value)
+    if clause.comparator == "between" and clause.value_high is not None:
+        middle = (clause.value + clause.value_high) / 2
+        return min(rows, key=lambda r: abs(r.value - middle))
+    return max(rows, key=lambda r: r.value)
 
 
 def _case_ids(rows: list[Observation]) -> list[str]:

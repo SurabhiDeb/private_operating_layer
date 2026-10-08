@@ -272,25 +272,57 @@ def _from_drift(session: Session, product: Product, run: GeneratorRun) -> list[_
         score += 20 if clause.state == "ratified" else 0
         score -= 40 if finding.stale else 0
 
-        if unjustified_bar:
+        if unjustified_bar and clause.state == "provisional":
+            # The state column already says what a proposal would: `provisional` is a bar
+            # stated and not yet agreed against the record. Proposing to set it again is
+            # a no-op, and proposing a number is the thing this rule exists not to do.
+            run.declined.append({
+                "finding": DRIFT,
+                "clause_ref": clause.ref,
+                "reason": (
+                    f"{clause.ref} states {detail['stated']}, no run on record has "
+                    f"reached it, and the clause is already provisional — which records "
+                    f"exactly that: a bar stated rather than agreed against the record. "
+                    f"What number it should be is the product owner's to set against the "
+                    f"{total} run(s) on file, and a bar nobody has met carries no "
+                    f"candidate the Layer could offer. Reported as a finding."
+                ),
+            })
+        elif unjustified_bar:
             out.append(_Candidate(
                 kind="clause_change",
                 capability=FROM_DRIFT,
                 target=f"clause:{clause.ref}",
-                field="value",
-                old_value=None if clause.value is None else str(clause.value),
-                new_value=_plain(detail["worst"]),
+                # The state, not the value. **The Layer proposes no number here**, and
+                # the first AC-16 sitting is why: this rule offered the *worst* run on
+                # record — 0.4545 against a no-tolerance bar four runs had reached 0.909
+                # — and a bar lowered to the worst observation is met by every run by
+                # construction, which makes the clause decorative. Choosing any other
+                # number is the same mistake with better manners: the Layer would be
+                # deciding what was promised from what was delivered.
+                #
+                # So it proposes what it can establish — that the bar is not agreed
+                # against the record — and leaves the number to the person who owns the
+                # promise. This is the shape `new_clause` already has beside it, which
+                # states a gap and sets no bar.
+                field="state",
+                old_value=clause.state,
+                new_value="provisional",
                 reason=(
                     f"{clause.ref} states {detail['stated']} and no run on record has "
                     f"reached it: {missed} of {total} runs are below, the furthest at "
-                    f"{_plain(detail['worst'])} in run {detail['worst_run']}. The clause "
-                    f"is {clause.state} and not ratified, so the bar was stated rather "
-                    f"than agreed against the record."
+                    f"{_plain(detail['worst'])} in run {detail['worst_run']}, the "
+                    f"closest at {_plain(detail['best'])}. The clause is "
+                    f"{clause.state} and not ratified, so the bar was stated rather "
+                    f"than agreed against the record. This proposes marking it "
+                    f"provisional and no number: what the bar should be is a decision "
+                    f"about what is promised, and the Layer has only what was delivered."
                 ),
                 evidence=finding.evidence[:8],
                 if_rejected=(
-                    "the bar stands as stated, so every run continues to be measured "
-                    "against a number no run on record has met."
+                    "the bar keeps reading as agreed, so every run continues to be "
+                    "measured against a number no run on record has met, and nothing "
+                    "distinguishes it from a bar the product does meet."
                 ),
                 score=score + 10,
                 signals=signals | {"rule": "bar_never_cleared"},

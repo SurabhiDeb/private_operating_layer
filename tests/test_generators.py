@@ -19,7 +19,7 @@ from layer.answers import decisions
 from layer.core import actors
 from layer.core.db import org_session
 from layer.core.errors import Refusal
-from layer.db.models import Clause, Proposal
+from layer.db.models import Clause, Observation, Proposal
 from layer.findings import queries
 from layer.findings.shapes import UNENFORCED
 from layer.onboarding import bindings as binding_gate
@@ -134,15 +134,21 @@ def test_the_branch_and_its_reason_agree(triage, policydesk):
 
 @pytest.mark.parametrize("state, expected", [("ratified", "ticket"),
                                              ("measured", "clause_change"),
-                                             ("provisional", "clause_change")])
+                                             ("provisional", None)])
 def test_a_bar_no_run_ever_cleared_turns_on_whether_it_was_ratified(
     triage, state, expected
 ):
-    """The third case, and the two it sits between.
+    """The three cases, and what each one may assert.
 
     A bar nothing ever reached is either an unjustified number or a promise the product
     has never kept, and `state` is what tells them apart: `ratified` means somebody
     signed it off, so the Layer does not propose lowering it on its own initiative.
+
+    **`provisional` expects no proposal, and that changed after the first AC-16
+    sitting.** It used to produce a `clause_change`, which is what the `measured` case
+    still produces — but a `provisional` clause already records exactly what such a
+    proposal would say, that the bar is stated rather than agreed against the record.
+    Proposing to set it again is a no-op, so it is declined with the reason instead.
 
     The condition is **constructed rather than waited for**: the bar is raised above
     every observed value so that no run ever cleared it. Neither reference product
@@ -171,12 +177,63 @@ def test_a_bar_no_run_ever_cleared_turns_on_whether_it_was_ratified(
 
     result = _run(session, product)
     mine = [p for p in result.proposals if p.target == f"clause:{ref}"]
+
+    if expected is None:
+        assert not mine, f"a provisional bar produced {[p.kind for p in mine]}"
+        reasons = [d["reason"] for d in result.declined if d["clause_ref"] == ref]
+        assert any("already provisional" in r for r in reasons), reasons
+        return
+
     assert mine, "a bar every run missed produced no proposal"
     assert mine[0].kind == expected
     if expected == "ticket":
         assert "not the Layer's to propose lowering" in mine[0].reason
     else:
         assert "no run on record has reached it" in mine[0].reason
+        # The number is the point: it proposes the state and no value, because the
+        # Layer has only what was delivered and the bar is what was promised.
+        assert mine[0].field_name == "state", mine[0].field_name
+        assert mine[0].new_value == "provisional", mine[0].new_value
+
+
+@pytest.mark.story("US-2")
+def test_no_proposal_ever_offers_an_observed_value_as_a_bar(triage, policydesk):
+    """The second finding from the first AC-16 sitting, as a standing guard.
+
+    The drift rule proposed lowering a no-tolerance bar to `0.4545`, the worst run on
+    record, where four of seven runs had reached `0.909`. A bar lowered to an observation
+    is met by that observation by construction, and choosing a kinder observation is the
+    same mistake with better manners: either way the Layer decides what was promised from
+    what was delivered.
+
+    So no proposal may put a measured number into a clause's bar. The assertion is over
+    every generator rather than the one that got it wrong, because the next generator to
+    reach for `detail["worst"]` will not be this one.
+    """
+    for fixture in (triage, policydesk):
+        session, product = fixture
+        result = _run(session, product)
+        rows = session.execute(select(Proposal)).scalars().all()
+        # Compared as the generator would write them, not as floats. `_plain` rounds to
+        # four places, so `0.45454545...` is proposed as `0.4545` and a tolerance tight
+        # enough to mean anything misses it — which is how the first version of this
+        # test passed against the behaviour it was written to catch.
+        observed = {
+            generators._plain(o.value)
+            for o in session.execute(select(Observation)).scalars()
+            if o.value is not None
+        }
+        offenders = [
+            (row.target, row.field, row.new_value)
+            for row in rows
+            if row.field in ("value", "value_high")
+            and row.new_value is not None
+            and row.new_value in observed
+        ]
+        assert offenders == [], (
+            f"{product.key}: a measured value is proposed as a bar: {offenders}"
+        )
+        assert result.proposals, "no proposals, so this proves nothing"
 
 
 @pytest.mark.story("US-2")
