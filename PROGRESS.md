@@ -2409,20 +2409,128 @@ mid-sitting.
 Neither finding was reachable by reading the code. Both came out of a person disagreeing
 with the queue.
 
+## Both findings, closed
+
+The gate from "Beyond phase 3" fired the way it was set up to: below 50%, no surface gets
+built around proposals, so phase 4 did not start and these came first.
+
+### 1. Whether a bar is one a build may fail on is declared, not inferred
+
+A `gate_intent` table, keyed `(org, product, clause_ref)` like a binding rather than as a
+column on `clause`, because clause rows are versioned and a declaration about a promise
+has to outlive a rewording of its text. A column would be silently reset to undeclared by
+the next spec import, which is how the noise would come back without anyone touching the
+generator. Migration `b2a845cf1e07`.
+
+**There is no `undeclared` value.** It is the absence of a row, exactly as an unconfirmed
+binding is. A third enum member would have to be written by the spec importer onto every
+clause it reads, which would make the Layer's own default indistinguishable from the
+owner's declaration — and the default is the thing that was wrong.
+
+**`report_only` requires a reason, enforced by a CHECK** rather than a convention, since
+a convention is what the first sitting had. The reason is quoted back in the decline, so
+a settled judgement is not re-argued next month.
+
+**Declaring is human-only**, for the reason `confirm_binding` is, and B11's argument
+carries across unchanged: a `gate` declaration is the precondition for a `ci_change`
+proposal about that clause, so an agent able to declare its own manufactures the
+precondition and can then propose freely. It lives in `answers/decisions.py`, is absent
+from `writes.py`, and is named in the server's `HUMAN_ONLY`. The role rule is borrowed
+rather than invented — whoever may decide a `ci_change` may declare whether a bar is
+gateable at all — because a second parallel role table for one verb is a second thing to
+get wrong.
+
+**A gate that already exists is its own declaration.** Somebody wrote that check, which
+settles the question more firmly than a row could, so widening a narrowed run set (H14)
+and giving a toothless check teeth (AC-15) still propose with nothing declared. Requiring
+a declaration first would make the Layer silent about the two conditions it was built to
+find.
+
+The two declines differ, and that is the point: "declared report-only: `<reason>`,
+declared by `<who>`" closes a question, while "nothing declares whether this is a bar a
+build may fail on" opens one with an owner and a next action. Collapsing them would turn
+a settled judgement into a recurring proposal, which is the treadmill the sitting
+measured.
+
+**A guard on the guard came with it.** Every isolation test named one table, so a tenant
+table added without a policy broke nothing —
+`test_every_tenant_table_has_row_level_security_and_a_policy` now asserts the property
+over the whole of `TENANT_TABLES`: RLS enabled, a policy present, and the `nullif` in its
+predicate. Verified by disabling RLS on the new table and watching it fail.
+
+### 2. The Layer proposes no number for a bar nobody ever met
+
+The `bar_never_cleared` branch offered the **worst** run on record. Choosing a kinder
+observation would be the same mistake with better manners: either way the Layer decides
+what was promised from what was delivered. So it proposes what it can establish — that
+the bar is not agreed against the record — and leaves the number to whoever owns the
+promise: `field="state"`, `new_value="provisional"`, and the bar itself untouched. The
+shape `new_clause` already had beside it.
+
+That makes the rule **three cases where it was two**, and the third is a decline: a clause
+already `provisional` records precisely what the proposal would say, so proposing to set
+it again is a no-op — and keeping it would have looped, since accepting it leaves the
+clause in the state that produced it.
+
+`detail["best"]` and `best_run` join the drift finding. "No run reached it" and "no run
+came near it" ask different things of a reader, and they are indistinguishable from
+`worst` alone — which is what the rejection turned on.
+
+**The regression guard was broken on its first attempt**, and that is worth recording
+more than the fix is. It passed against the exact behaviour it was written to catch:
+`_plain` rounds to four places, so `0.45454545...` is written `0.4545`, and a float
+tolerance tight enough to mean anything missed it. It now compares the strings the
+generator would write, and was re-verified by restoring the old code and watching it
+fail. The lesson is the one already in `CLAUDE.md` under "verify, do not assert", one
+level further in: a test watched failing is the only test known to test anything.
+
+### The declarations, as made
+
+`gate-declarations.sh` holds all 23, applied. 11 `gate`, 11 `report_only`, and PD-5.7
+left undeclared deliberately. The rule the operator stated: **gate the bars that are
+contracts or safety; do not gate diagnostics, bands, harness latencies or costs.**
+
+One declaration deliberately contradicts a live gate. The policy product's p95 latency is
+declared report-only — a harness number is not product evidence — while that product's
+gate does check p95 under 6s. The contradiction is the point: it is now visible, with a
+reason and a name against it, rather than implicit.
+
+## A third finding, found while declaring: an inverted clause
+
+PD-5.7 was left undeclared because its statement had not parsed. Reading the spec line
+showed something worse than a failed parse.
+
+The source states a **band** — `15% to 35%.` — and then explains it in prose: "Below 15%
+it is answering things it should not. Above 35% it is not earning its place."
+
+| | |
+|---|---|
+| What the band says | 15% is a **floor**: below it, the product is answering things it should refuse |
+| What was imported | `comparator <=`, `value 0.15`, `direction lower_is_better` — 15% as a **ceiling** |
+| What the band line produced | nothing. The actual target on its own line was not imported as a clause at all |
+| The statement | truncated at the line boundary: "not earning." for "not earning its place" |
+
+**The direction is the serious half.** A 10% abstention rate would be read `met` against
+that clause, where the specification calls it a failure. An absent or inverted promise
+reading as good news is the output `CLAUDE.md` names as the worst this system can produce,
+because it is indistinguishable from the real thing. The other two parts are a missing
+clause and a cosmetic truncation.
+
+**Not fixed, and deliberately not.** Making the spec importer emit a low-confidence
+extraction as a first-class finding — rather than silently producing a confident wrong
+clause — is a build item of its own, and guessing at it inside a sitting is how the first
+round of noise was made. What exists today is this record and one undeclared clause.
+
 ## Next
 
-**The gate from "Beyond phase 3" has fired, and it fired the way it was set up to.** Below
-50%, no surface gets built around proposals. So phase 4 does not start, and the two
-findings above come first:
-
-1. **Whether a bar is gateable is a property of the clause, not of the generator.** Until
-   it exists, roughly two thirds of the `ci_change` queue is noise a human has to clear by
-   hand, and the acceptance rate measures that rather than the Layer.
-2. **A bar nothing ever cleared should not be lowered to the worst run.** Either propose
-   the level the record actually supports, or propose no number and land it `provisional`,
-   as `new_clause` already does.
-
-Then re-run the sitting. A rate measured against a queue that does not ask for gates on
-monthly budgets is a different number, and it is the one worth putting against B6's band.
-Phase 4's half-day spike and the open question about whether the surface is Dust at all
-stay where they are until then.
+1. **Re-run the sitting.** The queue is now generated against 22 declarations instead of
+   none, so it no longer asks for gates on monthly budgets, and the drift rule no longer
+   offers a number. Whatever that rate is, it is the first one that measures the Layer
+   rather than the gap. It wants a fresh database, because the 47.6% round is a record
+   worth keeping intact.
+2. **The spec importer's confidence.** PD-5.7 above. An extraction the importer is not
+   sure of should arrive as a finding a human rules on, which is the same shape as every
+   other gate in this system.
+3. **Then the gate from "Beyond phase 3" again**, against the new number. Phase 4's
+   half-day spike and the open question about whether the surface is Dust at all stay
+   where they are until it lands.

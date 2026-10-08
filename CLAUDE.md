@@ -234,6 +234,15 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
   database: `createdb layer_ac16`, `alembic upgrade head` against it, and the two
   `LAYER_*_DATABASE_URL` variables exported for the session. Environment beats
   `.env` in `pydantic-settings`, so an export is enough.
+- **A test watched passing proves nothing; a test watched failing proves something.**
+  The regression guard for the drift rule's invented number passed against the exact
+  behaviour it was written to catch, because `_plain` rounds to four places and a float
+  tolerance tight enough to mean anything missed `0.45454545...` arriving as `0.4545`.
+  Mutate the code, watch the new test fail, then restore. This is "verify, do not
+  assert" applied to the test rather than the claim.
+- **`git checkout <file>` to undo a scratch edit destroys uncommitted work in that
+  file.** It restores from HEAD, not from before the edit. It deleted a whole new model
+  mid-session. Copy the file aside first, or mutate a copy.
 - **`metric_aliases` is keyed by the *normalised* metric name**, not by the spec's
   wording: `citation_validity`, never `Citation validity`. A key in the spec's spelling
   is silently never consulted, and the scan then reports a clause as unenforced, which
