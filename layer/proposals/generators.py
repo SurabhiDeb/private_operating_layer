@@ -402,6 +402,29 @@ def _from_unenforced(
                 ),
             })
         elif not enforced:
+            # `enforced: false` is two conditions, and one sentence cannot be true of
+            # both. Nothing checks the metric at all, or something checks it and cannot
+            # fail a build -- a check carrying an xfail, a `|| true`, a step marked
+            # continue-on-error. Saying "no file checks it" of the second is false, and
+            # the proposal cites the very line that checks it, so a reader can see that
+            # it is false. Which it is decides the reason and the rule recorded.
+            if detail["file"]:
+                where = f"{detail['file']}"
+                if detail["line"]:
+                    where = f"{where}#L{detail['line']}"
+                reason = (
+                    f"{finding.clause_ref} states {detail['stated']} and {where} "
+                    f"contains a check for {detail['metric']}, but "
+                    f"{detail['partial_note'] or 'the check cannot fail a build'}."
+                )
+                rule = "gate_cannot_fail_a_build"
+            else:
+                reason = (
+                    f"{finding.clause_ref} states {detail['stated']} and no file in the "
+                    f"code source checks {detail['metric']}: "
+                    f"{len(detail['ci_files'])} CI file(s) were scanned."
+                )
+                rule = "no_gate_at_all"
             out.append(_Candidate(
                 kind="ci_change",
                 capability=FROM_UNENFORCED,
@@ -409,18 +432,14 @@ def _from_unenforced(
                 field="enforced",
                 old_value="false",
                 new_value="true",
-                reason=(
-                    f"{finding.clause_ref} states {detail['stated']} and no file in the "
-                    f"code source checks {detail['metric']}: "
-                    f"{len(detail['ci_files'])} CI file(s) were scanned."
-                ),
+                reason=reason,
                 evidence=finding.evidence[:8],
                 if_rejected=(
                     "the clause stays unenforced, so nothing fails a build when the bar "
                     "is missed and the promise is kept by convention alone."
                 ),
                 score=60,
-                signals=signals | {"rule": "no_gate_at_all"},
+                signals=signals | {"rule": rule, "known_failing": detail["known_failing"]},
             ))
 
     for path, group in sorted(narrowed_by_file.items()):

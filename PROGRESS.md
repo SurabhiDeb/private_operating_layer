@@ -2335,6 +2335,40 @@ criterion that is not AC-35.
 **Closed during phase 5:** AC-33, AC-34, AC-35, H2, H7, EC-5, EC-6, EC-8, EC-12, US-2,
 US-10.
 
+## The AC-16 sitting: set up, and what setting it up found
+
+The queue is generated and waiting on a person. Both reference products are onboarded by
+hand through the CLI — the path an operator takes, not the test harness — into a database
+of their own, and `layer generate` produced **21 proposals**: 11 for the classifier
+product, 10 for the policy product. `ac16-sitting.sh` holds all 21 with their reasons and
+an `accept` and a `reject` line each, neither pre-chosen. The rate is `unmeasured` until
+they are decided, which is what the command prints.
+
+**It needed its own database.** `tests/conftest.py`'s `clean_tenants` is autouse and
+truncates `org CASCADE` after every test, so the first sitting was wiped by a `pytest`
+run mid-way. Recorded in `CLAUDE.md`; the sitting now lives in `layer_ac16`.
+
+**And the queue would not reach twenty without a code source on the second product.** Its
+own decline said so in words — "no code source is bound to this product, so nothing has
+looked at its CI. A proposal to add a gate would be asserting that no gate exists on
+evidence nobody gathered." Binding one took the queue from 13 to 21 and surfaced four
+defects, three in the enforcement adapter and one in the generator. All four were found
+by running the thing against a gate written by somebody else, and none was visible by
+reading the code.
+
+| # | What it was | Why it mattered |
+|---|---|---|
+| 1 | `_toothless` was computed once per **file** and stamped on every fact in it | The policy gate carries one `xfail(strict=True)` on an acknowledged gap, under a heading saying the checks above it block the build today. All four of its checks came back unable to fail a build — a false `enforced: false`, and therefore a proposal to repair a gate that works. Markers now scope to the block the check sits in, by indentation, so it holds for Python, YAML and a shell script alike; a flat file with nothing to scope to is still its own block |
+| 2 | `_match` returned the **first** line naming the metric | A file names a metric in its imports and its comments before it ever checks one. One clause's fact landed on an `import` line 58 lines above the real comparison — and since an import sits inside no block, defect 1 then marked it toothless as well. A comparison now beats a mention wherever each sits, and among mentions one that compares something beats one that only names it, which is the case where the bar is `100%` and the check is `assert invalid == []` with no number to read |
+| 3 | A metric named **in order to be excluded** was read as a check | The gate drops one metric's runs before reading a record. Matching the name there reported the one metric that gate deliberately does not cover as enforced, which suppressed its unenforced finding entirely: a real gap hidden, which is the failure the product exists to prevent. An exclusion is now never a check |
+| 4 | **The generator, not the adapter.** `enforced: false` is two conditions and the reason asserted one of them | "No file in the code source checks X" was written on a proposal whose own evidence cited `test_eval.py#L109` — the line that checks X, by a check that cannot fail a build. A reader could see the sentence was false from the proposal in front of them. Exactly step 16's defect 1 in a second place, and the same fix: the branch that writes a reason makes it true, and records which of the two it was in `rank_signals["rule"]` |
+
+Defect 3's comment named a fixture metric, and `test_agnosticism.py` failed on it — R1 and
+Appendix F enforced on a comment, which is the guard working rather than being tripped.
+
+Seven tests were added across the two files, each one watched failing against the old
+behaviour before the fix was kept. **683 passed.**
+
 ## Next
 
 **AC-16, which is a sitting rather than a step.** `layer generate` against each onboarded

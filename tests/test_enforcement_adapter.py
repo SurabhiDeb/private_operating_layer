@@ -11,6 +11,7 @@ leaves a real gap hidden, which is the failure the product exists to prevent; a 
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -198,6 +199,149 @@ class TestChecksWithoutTeeth:
         assert fact.enforced is False
         assert fact.known_failing is True
         assert "cannot fail a build" in fact.partial_note
+
+    @pytest.mark.ac("AC-4")
+    def test_a_marker_on_one_check_does_not_disable_the_check_beside_it(self):
+        """A decorator belongs to the function under it, not to the file.
+
+        The reference policy gate is this shape: one `xfail(strict=True)` on a known
+        gap, under a heading saying the checks above it block the build today. Read
+        file-wide the marker reported all four as unable to fail a build, which is a
+        false `enforced: false` and therefore a proposal to repair a working gate.
+        """
+        source = textwrap.dedent("""
+            for r in runs:
+                pass
+
+            def test_team_accuracy(results):
+                assert accuracy(results) >= 0.85
+
+            @pytest.mark.xfail(strict=True, reason="known gap")
+            def test_escalation_recall(results):
+                assert recall(results) >= 0.99
+        """)
+        facts = {f.metric: f for f in scan(source, (ACCURACY, RECALL)).candidates}
+        assert set(facts) == {"team_accuracy", "escalation_recall"}
+
+        assert facts["team_accuracy"].enforced is True
+        assert facts["team_accuracy"].known_failing is False
+        assert "cannot fail a build" not in (facts["team_accuracy"].partial_note or "")
+
+        assert facts["escalation_recall"].enforced is False
+        assert facts["escalation_recall"].known_failing is True
+        assert "cannot fail a build" in facts["escalation_recall"].partial_note
+
+    def test_a_flat_file_with_no_structure_is_its_own_block(self):
+        """Where there is nothing to scope to, the file is the scope.
+
+        A marker anywhere in a script whose checks all sit at the left margin may well
+        govern all of them, and claiming otherwise would be the false `enforced: true`
+        this adapter is written to avoid.
+        """
+        source = "for r in runs: pass\nMIN_TEAM_ACCURACY = 0.85\nset +e\n"
+        assert only(scan(source)).known_failing is True
+
+
+class TestWhichLineIsTheCheck:
+    """A file names a metric long before it checks one."""
+
+    @pytest.mark.ac("AC-4")
+    def test_an_import_naming_a_metric_is_not_the_check(self):
+        """Taking the first line that matched read the import as the gate.
+
+        The reference policy gate imports `quotes` on line 14 and compares it on line
+        72. Reported at the import the bar is unreadable, and -- since an import sits
+        in no block -- any marker in the file then made it toothless too.
+        """
+        filler = "\n".join(f"x{n} = {n}" for n in range(10))
+        source = (
+            "from metrics import team_accuracy\n"
+            f"{filler}\n"
+            "@pytest.mark.xfail(strict=True, reason='a different known gap')\n"
+            "def test_something_else(results):\n"
+            "    assert False\n"
+            "\n"
+            "def test_team_accuracy(results):\n"
+            "    for r in runs:\n"
+            "        assert team_accuracy(r) >= 0.85\n"
+        )
+        fact = only(scan(source))
+        assert fact.threshold == 0.85, fact.partial_note
+        assert fact.line == 16
+        assert fact.enforced is True
+        assert fact.known_failing is False
+
+    @pytest.mark.ac("AC-4")
+    def test_a_check_with_no_number_is_found_ahead_of_a_bare_mention(self):
+        """`assert invalid == []` enforces a 100% bar without writing 100 anywhere.
+
+        The reference policy gate checks citation validity exactly that way. With no
+        number to read, every line naming the metric is a mention, and the import won
+        on position -- which put the fact on an import line and, since an import sits
+        in no block, marked it toothless from a marker elsewhere in the file.
+        """
+        filler = "\n".join(f"x{n} = {n}" for n in range(10))
+        source = (
+            "from metrics import quotes\n"
+            f"{filler}\n"
+            "@pytest.mark.xfail(strict=True, reason='a different known gap')\n"
+            "def test_something_else(results):\n"
+            "    assert False\n"
+            "\n"
+            "def test_every_quote_is_verbatim(results):\n"
+            "    for r in runs:\n"
+            "        assert quotes(r) == []\n"
+        )
+        fact = only(scan(source, (Expectation("citation_validity", ">=", 1.0,
+                                              label="Citation validity"),),
+                         {"metric_aliases": {"citation_validity": ["quotes"]}}))
+        assert fact.line == 18
+        assert fact.comparator == "=="
+        assert fact.known_failing is False
+        assert fact.enforced is True
+
+    def test_a_mention_and_nothing_else_is_still_reported(self):
+        """Absence of a comparison is not absence of the name. The mention is the
+        honest answer when the file compares nothing anywhere."""
+        source = "for r in runs: pass\nfrom metrics import team_accuracy\n"
+        fact = only(scan(source))
+        assert fact.line == 2
+        assert fact.threshold is None
+        assert "could not be read" in fact.partial_note
+
+
+class TestAnExclusionIsNotACheck:
+    """Naming a metric to leave it out is the opposite of checking it."""
+
+    @pytest.mark.ac("AC-4")
+    def test_a_metric_excluded_from_the_run_set_is_not_enforced(self):
+        """The reference policy gate drops the groundedness runs before reading one.
+
+        Matching the name there reported groundedness as enforced, which suppressed the
+        unenforced finding for the one metric that gate deliberately does not cover --
+        a real gap hidden, which is the failure the product exists to prevent.
+        """
+        source = textwrap.dedent("""
+            files = [p for p in RUNS.glob("*.json") if "groundedness" not in p.name]
+            for r in files:
+                pass
+        """)
+        report = scan(source, (Expectation("groundedness", ">=", 0.98,
+                                           label="Groundedness"),))
+        assert report.candidates == []
+        assert [sk.reason for sk in report.skipped] == ["no_threshold_found"]
+
+    def test_an_exclusion_does_not_hide_a_real_check_elsewhere(self):
+        """The exclusion is skipped, not the file."""
+        source = textwrap.dedent("""
+            files = [p for p in RUNS.glob("*.json") if "groundedness" not in p.name]
+            for r in files:
+                assert groundedness(r) >= 0.98
+        """)
+        fact = only(scan(source, (Expectation("groundedness", ">=", 0.98,
+                                              label="Groundedness"),)))
+        assert fact.threshold == 0.98
+        assert fact.enforced is True
 
 
 class TestReporting:

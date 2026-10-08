@@ -60,12 +60,28 @@ _RUN_COLLECTION = (
 
 #: A check that runs but cannot fail the build. Worth detecting because it looks enforced
 #: in every dashboard and is not.
+#:
+#: Each of these disables the check it sits with, not every check in the file: a
+#: decorator belongs to one function, a `|| true` to one command, a step's
+#: `continue-on-error` to that step. Read file-wide, one known gap reports every other
+#: check around it as toothless, which is a false `enforced: false` and therefore a
+#: proposal to fix a gate that works.
 _TOOTHLESS = (
     (r"continue-on-error\s*:\s*true", "the CI step is marked continue-on-error"),
     (r"\|\|\s*true\b", "the command's failure is swallowed by `|| true`"),
     (r"\bset\s+\+e\b", "the shell stops failing on error"),
     (r"@pytest\.mark\.(?:skip|xfail)", "the check is skipped or expected to fail"),
     (r"#\s*(?:TODO|FIXME).{0,40}\b(?:enable|re-?enable)\b", "the check is disabled pending work"),
+)
+
+#: A line that names a metric in order to leave it out. A gate that drops one metric's
+#: runs before reading a record -- `if "<metric>" not in path.name` -- names it on that
+#: line, and matching there read the exclusion as a check: the one metric the gate
+#: deliberately does not cover came back enforced. That is a real gap hidden, the
+#: failure this adapter exists to prevent, so an exclusion is never a check.
+_EXCLUDING = (
+    r"\bnot\s+in\b",
+    r"!=",
 )
 
 _COMPARATOR = re.compile(r"(>=|<=|==|!=|<|>)")
@@ -158,7 +174,6 @@ class EnforcementAdapter:
         lines = text.splitlines()
 
         scope, scope_note = self._scope(text)
-        toothless = self._toothless(text)
 
         out: list[EnforcementCandidate] = []
         for expectation in wanted:
@@ -166,6 +181,7 @@ class EnforcementAdapter:
             if hit is None:
                 continue
             line_no, threshold, comparator, note = hit
+            toothless = self._toothless(_block_around(lines, line_no - 1))
 
             partial_note = note
             if scope_note and scope != "all_runs":
@@ -203,8 +219,21 @@ class EnforcementAdapter:
         name = _name_pattern(
             expectation.metric, expectation.label, settings.aliases.get(expectation.metric)
         )
+        # A comparison beats a mention, wherever each sits. A file names a metric in its
+        # imports, its docstring and its comments before it ever checks one, and taking
+        # the first line that matched reported the import as the check -- a bar read as
+        # unreadable, and in a file with a marker, as toothless.
+        #
+        # Where no line carries a readable number -- `assert invalid == []` enforces a
+        # 100% bar without writing 100 anywhere -- a mention is still the honest
+        # answer, and among mentions the one that compares something beats the one
+        # that only names it. The earliest wins within each of those tiers.
+        mention: tuple[int, None, str | None, str] | None = None
+
         for index, line in enumerate(lines):
             if not name.search(line):
+                continue
+            if any(re.search(p, line) for p in _EXCLUDING):
                 continue
             line_no = index + 1
             start, end = max(0, index - window), min(len(lines), index + window + 1)
@@ -221,14 +250,16 @@ class EnforcementAdapter:
                         f"states {expectation.value:g}"
                     )
                 return line_no, threshold, comparator, note
-            return (
-                line_no,
-                None,
-                comparator,
-                "a check naming this metric exists, but no literal matching the stated "
-                "threshold was found nearby, so the enforced value could not be read",
-            )
-        return None
+            if mention is None or (comparator and not mention[2]):
+                mention = (
+                    line_no,
+                    None,
+                    comparator,
+                    "a check naming this metric exists, but no literal matching the "
+                    "stated threshold was found nearby, so the enforced value could "
+                    "not be read",
+                )
+        return mention
 
     # -- file-level reads ----------------------------------------------------------
 
@@ -262,6 +293,62 @@ class EnforcementAdapter:
 
 
 # -- matching helpers ------------------------------------------------------------
+
+
+def _block_around(lines: list[str], index: int) -> str:
+    """The span of the check at `index`, read by indentation.
+
+    A marker that disables a check sits with that check: a decorator on the line above
+    its function, a `|| true` on the command itself, a `continue-on-error` inside the
+    step it belongs to. Reading the whole file instead lets one acknowledged gap report
+    every other check around it as unable to fail a build -- the reference policy gate
+    carries one `xfail(strict=True)` under a heading that says the rest block the build
+    today, and file-wide reading called all four of its checks toothless.
+
+    Indentation rather than a parser, because this has to hold for Python, YAML and a
+    shell script alike without knowing which it was handed. Where a file has no
+    structure to read -- a flat script whose checks all sit at the left margin -- the
+    block is the whole file, which for that file is the only honest answer.
+    """
+    if not lines or not 0 <= index < len(lines):
+        return "\n".join(lines)
+
+    def indent(line: str) -> int:
+        return len(line) - len(line.lstrip())
+
+    own = indent(lines[index])
+
+    # A name often matches the check's own header -- `def test_team_accuracy` -- rather
+    # than a line inside it. A header is recognised by what follows it being indented
+    # under it, which holds for Python, YAML and a braced language alike.
+    following = next(
+        (indent(l) for l in lines[index + 1:] if l.strip()), None
+    )
+    if following is not None and following > own:
+        header = index
+    else:
+        header = next(
+            (j for j in range(index - 1, -1, -1)
+             if lines[j].strip() and indent(lines[j]) < own),
+            None,
+        )
+    if header is None:
+        # Nothing encloses this line and it opens nothing. The file is its own block.
+        return "\n".join(lines)
+
+    start, depth = header, indent(lines[header])
+    while start and lines[start - 1].strip()[:1] in ("@", "#") and (
+        indent(lines[start - 1]) == depth
+    ):
+        start -= 1
+
+    end = len(lines)
+    for k in range(index + 1, len(lines)):
+        if lines[k].strip() and indent(lines[k]) <= depth:
+            end = k
+            break
+    return "\n".join(lines[start:end])
+
 
 
 def _name_pattern(

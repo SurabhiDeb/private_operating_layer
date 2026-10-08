@@ -227,6 +227,18 @@ Recorded so they are not re-litigated. Rationale is in `PROGRESS.md` and the pla
 - **`git ls-tree` does not glob.** It rejects `:(glob)` magic and treats
   `products/*/runs/*.json` as matching nothing — succeeding, with no output. Path
   filtering happens in Python via `PurePath.full_match`. See `layer/adapters/repo.py`.
+- **The test suite empties the database it runs against.** `tests/conftest.py`'s
+  `clean_tenants` is autouse and `TRUNCATE org CASCADE` after **every** test. Anything
+  onboarded by hand into the database named in `.env` is gone the next time `pytest`
+  runs, which is how the first AC-16 sitting was lost mid-way. A sitting gets its own
+  database: `createdb layer_ac16`, `alembic upgrade head` against it, and the two
+  `LAYER_*_DATABASE_URL` variables exported for the session. Environment beats
+  `.env` in `pydantic-settings`, so an export is enough.
+- **`metric_aliases` is keyed by the *normalised* metric name**, not by the spec's
+  wording: `citation_validity`, never `Citation validity`. A key in the spec's spelling
+  is silently never consulted, and the scan then reports a clause as unenforced, which
+  is a finding that is simply wrong. The scan's own "not checked anywhere" list prints
+  the normalised names, so it is the place to read the right keys from.
 
 ## Verify, do not assert
 

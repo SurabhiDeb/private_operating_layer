@@ -250,6 +250,53 @@ def test_nothing_is_proposed_about_a_gate_the_scan_never_read(policydesk):
     assert any("no code source is bound" in r for r in reasons), reasons
 
 
+@pytest.mark.ac("AC-15")
+def test_a_check_that_cannot_fail_a_build_is_not_reported_as_no_check_at_all(policydesk):
+    """`enforced: false` is two conditions, and one sentence is false of one of them.
+
+    The reason said "no file in the code source checks X" while the proposal cited the
+    line that checks it -- a gate carrying an `xfail(strict=True)` on a known gap. A
+    reader could see the sentence was false from the proposal's own evidence. Same
+    discipline as the drift rule: the branch that writes a reason has to make it true.
+
+    Neither reference fixture is onboarded with a code source over a gate of that
+    shape, so the condition is built here rather than skipped on both.
+    """
+    session, _ = policydesk
+    org = make_org("toothless-gate")
+    with org_session(org) as fresh:
+        product = onboard(
+            fresh, org, "policydesk", "PD", POLICYDESK_METRICS,
+            cases={"input_field": "question"},
+            pairs={"critical_pass_rate": "PD-8.8"},
+            code={"files": ["products/policydesk/tests/test_eval.py"]},
+        )
+        result = _run(fresh, product)
+        rows = {
+            r.target: r
+            for r in fresh.execute(select(Proposal)).scalars()
+            if r.capability == generators.FROM_UNENFORCED
+        }
+
+        checked = [r for r in rows.values()
+                   if r.rank_signals.get("rule") == "gate_cannot_fail_a_build"]
+        assert checked, sorted(
+            (t, r.rank_signals.get("rule")) for t, r in rows.items()
+        )
+        for row in checked:
+            assert "no file in the code source checks" not in row.reason, row.reason
+            assert "contains a check for" in row.reason, row.reason
+            assert "cannot fail a build" in row.reason, row.reason
+
+        for row in rows.values():
+            if row.rank_signals.get("rule") != "no_gate_at_all":
+                continue
+            # The other half of the same claim: where nothing checks it, the sentence
+            # that says so must not cite a line that does.
+            assert "no file in the code source checks" in row.reason, row.reason
+            assert not [e for e in (row.evidence or []) if e.startswith("file:")], row.evidence
+
+
 # -- H16: a metric nothing promises ----------------------------------------------
 
 
