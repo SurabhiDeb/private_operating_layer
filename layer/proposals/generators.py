@@ -42,7 +42,7 @@ from layer.answers import writes
 from layer.core import audit
 from layer.answers.shapes import ProposedChange
 from layer.core.errors import NotLive, Refusal
-from layer.db.models import Clause, Product
+from layer.db.models import Clause, GateIntent, Product
 from layer.findings import queries
 from layer.findings.shapes import (
     DRIFT,
@@ -361,6 +361,16 @@ def _from_unenforced(
         return out
 
     read_a_gate = any(f.detail["ci_files"] for f in found)
+    #: What the product's owner has declared a build may fail on, by clause ref. Read
+    #: here rather than through `layer.answers.decisions`, which writes these rows: the
+    #: proposer has no business importing the decider, which is the whole point of the
+    #: two modules being apart.
+    declared = {
+        row.clause_ref: row
+        for row in session.execute(
+            select(GateIntent).where(GateIntent.product_id == product.id)
+        ).scalars()
+    }
     #: H14 candidates are grouped by the file whose run set would change. Two clauses
     #: checked by one gate need **one** change to one file, and B4 item 1 is one change
     #: to one field — emitting it per clause produced a duplicate the index then refused,
@@ -408,6 +418,21 @@ def _from_unenforced(
             # continue-on-error. Saying "no file checks it" of the second is false, and
             # the proposal cites the very line that checks it, so a reader can see that
             # it is false. Which it is decides the reason and the rule recorded.
+            # A gate that already exists is its own declaration. Someone wrote that
+            # check, which settles whether this bar is the kind a build may fail on
+            # more firmly than any row could; proposing to give it teeth, or to widen
+            # the run set it reads, needs no further permission. Only a proposal to
+            # add a gate where none exists rests on an intent nobody has stated.
+            if not detail["file"]:
+                intent = declared.get(finding.clause_ref)
+                if intent is None or intent.intent != "gate":
+                    run.declined.append({
+                        "finding": UNENFORCED,
+                        "clause_ref": finding.clause_ref,
+                        "reason": _why_not_gateable(finding.clause_ref, intent),
+                    })
+                    continue
+
             if detail["file"]:
                 where = f"{detail['file']}"
                 if detail["line"]:
@@ -491,6 +516,31 @@ def _dedupe(refs) -> list[str]:
             seen.add(ref)
             out.append(ref)
     return out
+
+
+def _why_not_gateable(clause_ref: str, intent) -> str:
+    """Which of the two it is: declared report-only, or never declared at all.
+
+    The distinction is the whole point. "Somebody considered this and said no, because
+    it is a harness number" is a closed question, and the reason is quoted back so it is
+    not re-argued. "Nobody has said" is an open one with an owner and a next action.
+    Collapsing them would turn a settled judgement into a recurring proposal, which is
+    the treadmill the first AC-16 sitting measured.
+    """
+    if intent is not None:
+        return (
+            f"{clause_ref} is declared report-only, so a build is not meant to fail on "
+            f"it: {intent.reason} Declared by {intent.declared_by}. Reported as a "
+            f"finding, which is what report-only asks for."
+        )
+    return (
+        f"nothing declares whether {clause_ref} is a bar a build may fail on, and a "
+        f"proposal to add a gate asserts that it is. The Layer cannot tell a promise to "
+        f"a customer from a property of the machine that ran the suite — the two are "
+        f"identical in every column it has — so this is the product owner's to state: "
+        f"`layer clauses gate {clause_ref} --intent gate|report_only`. Reported as a "
+        f"finding until then."
+    )
 
 
 def _why_no_gate_read(session: Session, product: Product) -> str:

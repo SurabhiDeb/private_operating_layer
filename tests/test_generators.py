@@ -16,10 +16,12 @@ import pytest
 from sqlalchemy import select
 
 from layer.answers import decisions
+from layer.core import actors
 from layer.core.db import org_session
 from layer.core.errors import Refusal
 from layer.db.models import Clause, Proposal
 from layer.findings import queries
+from layer.findings.shapes import UNENFORCED
 from layer.onboarding import bindings as binding_gate
 from layer.onboarding import state
 from layer.proposals import generators
@@ -33,6 +35,8 @@ from test_findings import (  # noqa: F401 - fixtures
     policydesk,
     triage,
 )
+
+PM = "pm@example.invalid"
 
 pytestmark = pytest.mark.needs_db
 
@@ -295,6 +299,110 @@ def test_a_check_that_cannot_fail_a_build_is_not_reported_as_no_check_at_all(pol
             # that says so must not cite a line that does.
             assert "no file in the code source checks" in row.reason, row.reason
             assert not [e for e in (row.evidence or []) if e.startswith("file:")], row.evidence
+
+
+# -- whether a bar is one a build may fail on ------------------------------------
+
+
+def _unenforced_rows(session):
+    return {
+        r.target: r
+        for r in session.execute(select(Proposal)).scalars()
+        if r.capability == generators.FROM_UNENFORCED
+    }
+
+
+@pytest.mark.ac("AC-4")
+def test_no_gate_is_proposed_for_a_bar_nobody_declared_gateable(triage):
+    """What the first AC-16 sitting measured.
+
+    Fifteen of twenty-one proposals were a stated bar with no CI gate, and the generator
+    drew no distinction between a safety bar and a monthly budget no CI run can observe.
+    Proposing a gate asserts the bar is one a build may fail on, and an undeclared
+    clause has not established that — the same discipline as `scope: undetermined`.
+    """
+    session, product = triage
+    result = _run(session, product)
+
+    rows = _unenforced_rows(session)
+    assert not [r for r in rows.values()
+                if r.rank_signals.get("rule") == "no_gate_at_all"], sorted(rows)
+
+    reasons = [d["reason"] for d in result.declined if d["finding"] == UNENFORCED]
+    assert any("nothing declares whether" in r for r in reasons), reasons
+    assert any("layer clauses gate" in r for r in reasons), reasons
+
+
+@pytest.mark.ac("AC-4")
+def test_a_bar_declared_gateable_is_proposed_and_one_declared_report_only_is_not(triage):
+    """The declaration is what separates them, and the two declines differ.
+
+    "Somebody considered this and said no, because it is a harness number" is a closed
+    question whose reason is quoted back. "Nobody has said" is an open one with an owner.
+    """
+    session, product = triage
+    # The refs come from the findings, not from the clause table: a bar that already has
+    # a gate is not an unenforced finding at all, so declaring one gateable would prove
+    # nothing about this branch.
+    ungated = [
+        f.clause_ref for f in queries.find_unenforced(session, product=product)
+        if not f.detail["file"]
+    ]
+    assert len(ungated) >= 2, ungated
+    gated, reported = ungated[0], ungated[1]
+
+    actors.add(session, org_id=product.org_id, email=PM, role="pm")
+    decisions.declare_gate_intent(
+        session, product=product, clause_ref=gated, intent="gate", by=PM,
+    )
+    decisions.declare_gate_intent(
+        session, product=product, clause_ref=reported, intent="report_only", by=PM,
+        reason="a harness number, not a product number.",
+    )
+    result = _run(session, product)
+
+    rows = _unenforced_rows(session)
+    declared_gate = [r for r in rows.values()
+                     if r.target == f"clause:{gated}"
+                     and r.rank_signals.get("rule") == "no_gate_at_all"]
+    assert declared_gate, sorted((t, r.rank_signals.get("rule")) for t, r in rows.items())
+    assert f"clause:{reported}" not in rows
+
+    # One ref can be declined by more than one generator -- an uncovered clause is also
+    # an unenforced one -- so the reason has to be picked by finding, not by ref alone.
+    reasons = [d["reason"] for d in result.declined
+               if d["clause_ref"] == reported and d["finding"] == UNENFORCED]
+    assert reasons, [d for d in result.declined if d["clause_ref"] == reported]
+    reason = reasons[0]
+    assert "declared report-only" in reason, reason
+    assert "a harness number" in reason, reason
+    assert PM in reason, reason
+
+
+@pytest.mark.ac("AC-15")
+def test_an_existing_gate_needs_no_declaration_to_be_improved(policydesk):
+    """A gate that exists is its own declaration.
+
+    Somebody wrote that check, which settles whether the bar is the kind a build may
+    fail on more firmly than a row could. Requiring a declaration before proposing to
+    give an `xfail`-ed check teeth, or to widen the run set a narrowed gate reads, would
+    make the Layer silent about the two conditions it was built to find.
+    """
+    session, _ = policydesk
+    org = make_org("gate-exists")
+    with org_session(org) as fresh:
+        product = onboard(
+            fresh, org, "policydesk", "PD", POLICYDESK_METRICS,
+            cases={"input_field": "question"},
+            pairs={"critical_pass_rate": "PD-8.8"},
+            code={"files": ["products/policydesk/tests/test_eval.py"]},
+        )
+        assert not decisions.gate_intents(fresh, product=product)
+        _run(fresh, product)
+
+        rules = {r.rank_signals.get("rule") for r in _unenforced_rows(fresh).values()}
+        assert "gate_cannot_fail_a_build" in rules, rules
+        assert "no_gate_at_all" not in rules, rules
 
 
 # -- H16: a metric nothing promises ----------------------------------------------

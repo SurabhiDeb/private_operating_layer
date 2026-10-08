@@ -486,3 +486,147 @@ def test_an_unscored_proposal_shows_a_null_confidence_rather_than_zero(alien_rep
         clause = _a_clause(session, product)
         _propose(session, product, clause)
         assert decisions.queue(session, product=product)[0]["confidence"] is None
+
+
+# -- declaring what a build may fail on ------------------------------------------
+
+
+class TestGateIntent:
+    """Whether a stated bar is one a build may fail on, declared rather than guessed.
+
+    The first AC-16 sitting is why this exists: fifteen of twenty-one proposals were a
+    stated bar with no CI gate, and eight of the eleven rejections were one missing
+    distinction — a promise to a customer against a property of the machine that ran
+    the suite, which are identical in every column the Layer has.
+    """
+
+    def test_a_declaration_is_recorded_with_who_made_it(self, alien_repo):
+        org = make_org("gate-intent")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+
+            result = decisions.declare_gate_intent(
+                session, product=product, clause_ref=clause.ref,
+                intent="gate", by=PM,
+            )
+            assert result["intent"] == "gate"
+            assert result["previous"] is None
+            assert result["declared_by"] == PM
+
+            stored = decisions.gate_intents(session, product=product)
+            assert stored[clause.ref].intent == "gate"
+            assert stored[clause.ref].declared_by == PM
+
+    def test_declaring_report_only_without_a_reason_is_refused(self, alien_repo):
+        """The reason is most of the value: it is what stops the same proposal arriving
+        next month to be argued from scratch."""
+        org = make_org("gate-intent-reason")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+            with pytest.raises(Unreadable, match="needs a reason"):
+                decisions.declare_gate_intent(
+                    session, product=product, clause_ref=clause.ref,
+                    intent="report_only", by=PM,
+                )
+
+    def test_the_database_refuses_a_report_only_row_with_no_reason(self, alien_repo):
+        """The Python refusal is the readable half. This is the half that holds when
+        something writes the row by another route."""
+        from sqlalchemy.exc import IntegrityError
+
+        from layer.db.models import GateIntent
+
+        org = make_org("gate-intent-check")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+            session.add(GateIntent(
+                org_id=org, product_id=product.id, clause_ref=clause.ref,
+                intent="report_only", reason=None, declared_by=PM,
+            ))
+            with pytest.raises(IntegrityError, match="ck_gate_intent_report_only_has_reason"):
+                session.flush()
+            session.rollback()
+
+    def test_an_unknown_intent_is_refused_and_names_the_two(self, alien_repo):
+        """`undeclared` is not a third value. It is the absence of a row, and the
+        refusal says so rather than accepting a word that would read as a declaration."""
+        org = make_org("gate-intent-unknown")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+            with pytest.raises(Unreadable, match="unknown gate intent"):
+                decisions.declare_gate_intent(
+                    session, product=product, clause_ref=clause.ref,
+                    intent="undeclared", by=PM,
+                )
+
+    def test_a_declaration_about_a_clause_that_does_not_exist_is_refused(self, alien_repo):
+        """A typo'd ref would otherwise sit in the table declaring something about a
+        clause nobody can find, and read as a gap somebody closed."""
+        org = make_org("gate-intent-typo")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            with pytest.raises(Unreadable, match="no active clause"):
+                decisions.declare_gate_intent(
+                    session, product=product, clause_ref="NOPE-9.9",
+                    intent="gate", by=PM,
+                )
+
+    @pytest.mark.parametrize("who, allowed", [(PM, True), (ENGINEER, True), (AGENT, False)])
+    def test_the_role_rule_is_the_one_for_a_ci_change(self, alien_repo, who, allowed):
+        """Borrowed rather than invented: whoever may decide a `ci_change` may declare
+        whether a bar is gateable at all. A second parallel role table for one verb
+        would be a second thing to get wrong."""
+        org = make_org(f"gate-intent-role-{who.split('@')[0]}")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+            if allowed:
+                assert decisions.declare_gate_intent(
+                    session, product=product, clause_ref=clause.ref,
+                    intent="gate", by=who,
+                )["declared_by"] == who
+            else:
+                with pytest.raises(actors.RoleForbids):
+                    decisions.declare_gate_intent(
+                        session, product=product, clause_ref=clause.ref,
+                        intent="gate", by=who,
+                    )
+
+    def test_a_declaration_can_be_revised_and_the_change_is_audited(self, alien_repo):
+        """A metric can move from the harness into production, so this is a judgement
+        that can be revised. The alternative is an operator deleting a row."""
+        org = make_org("gate-intent-revise")
+        with org_session(org) as session:
+            product = _live(session, org, alien_repo)
+            clause = _a_clause(session, product)
+
+            decisions.declare_gate_intent(
+                session, product=product, clause_ref=clause.ref, intent="report_only",
+                by=PM, reason="measured in the harness, not in production.",
+            )
+            again = decisions.declare_gate_intent(
+                session, product=product, clause_ref=clause.ref, intent="gate", by=PM,
+            )
+            assert again["previous"] == "report_only"
+            assert again["intent"] == "gate"
+            assert decisions.gate_intents(session, product=product)[clause.ref].reason is None
+
+            events = session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.action == decisions.GATE_INTENT_DECLARED
+                ).order_by(AuditEvent.created_at)
+            ).scalars().all()
+            assert [e.detail["intent"] for e in events] == ["report_only", "gate"]
+            assert [e.detail["previous"] for e in events] == [None, "report_only"]
+            assert {e.actor for e in events} == {PM}
+
+    def test_declaring_is_absent_from_the_module_the_mcp_server_imports(self):
+        """The same property B11 asks of `accept_proposal`, for the same reason: a
+        `gate` declaration is the precondition for a `ci_change` proposal about that
+        clause, so an agent that can declare its own manufactures it."""
+        assert not hasattr(writes, "declare_gate_intent")
+        assert hasattr(decisions, "declare_gate_intent")

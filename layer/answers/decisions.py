@@ -31,12 +31,21 @@ from sqlalchemy.orm import Session
 from layer.core import actors, audit
 from layer.findings import traces
 from layer.core.errors import Refusal, Unreadable
-from layer.db.models import Clause, Link, Observation, Product, Proposal
+from layer.db.models import (
+    GATE_INTENTS,
+    Clause,
+    GateIntent,
+    Link,
+    Observation,
+    Product,
+    Proposal,
+)
 
 PROPOSAL_ACCEPTED = "proposal_accepted"
 PROPOSAL_REJECTED = "proposal_rejected"
 PROPOSAL_INVALIDATED = "proposal_invalidated"
 PROPOSAL_EVIDENCE_EXPIRED = "proposal_evidence_expired"
+GATE_INTENT_DECLARED = "gate_intent_declared"
 
 #: PRD B6. Both edges matter and the upper one is the unusual part: above it, either the
 #: proposals are trivial or nobody is reading them, and a rubber stamp on changes to the
@@ -66,6 +75,105 @@ def _now(session: Session) -> datetime:
     """The database's clock, not the process's. Every other timestamp in the Layer
     comes from there and a decision ordered against a different clock is unorderable."""
     return session.execute(select(func.now())).scalar_one()
+
+
+# -- what a build may fail on ----------------------------------------------------
+
+
+def declare_gate_intent(
+    session: Session,
+    *,
+    product: Product,
+    clause_ref: str,
+    intent: str,
+    by: str,
+    reason: str | None = None,
+) -> dict:
+    """Declare whether a stated bar is one a build may fail on. Human-only.
+
+    **It lives here, beside `accept`, because it is the same kind of act.** A `gate`
+    declaration is the precondition for a `ci_change` proposal about that clause, so an
+    agent able to declare its own intent manufactures the precondition and can then
+    propose freely — which is exactly B11's argument for `confirm_binding`, one table
+    further on. `writes.py` is what the MCP server imports and this is not in it.
+
+    **The role rule is borrowed rather than invented.** Whoever may decide a `ci_change`
+    may declare whether a bar is gateable at all: a pm for everything, an engineer whose
+    authority is the gate and the suite, and an `agent` for nothing. A second parallel
+    role table for one verb would be a second thing to get wrong.
+
+    Idempotent on the clause ref, because a declaration is a judgement that can be
+    revised when a metric moves from the harness into production, and the alternative is
+    an operator deleting a row.
+    """
+    if intent not in GATE_INTENTS:
+        raise Unreadable(
+            f"unknown gate intent {intent!r}. One of: {', '.join(GATE_INTENTS)}. "
+            "A bar nobody has declared is not a third value — it is the absence of a "
+            "declaration, and the generator says so rather than guessing."
+        )
+    if intent == "report_only" and not (reason or "").strip():
+        # The CHECK enforces this too. Refusing here means the operator reads a sentence
+        # about why instead of an integrity error.
+        raise Unreadable(
+            "declaring a bar report-only needs a reason. It is the half that carries: "
+            "'a harness number, not a product number' is what stops the same proposal "
+            "arriving next month to be argued from scratch."
+        )
+
+    ref = clause_ref.strip()
+    known = session.execute(
+        select(Clause.ref).where(
+            Clause.product_id == product.id, Clause.ref == ref, Clause.status == "active"
+        )
+    ).scalars().first()
+    if known is None:
+        # Not a silent insert. A typo'd ref would otherwise sit in the table declaring
+        # something about a clause that does not exist, and read as a gap nobody closed.
+        raise Unreadable(
+            f"{product.key} has no active clause {ref!r}. A declaration names a promise "
+            "on the record, so there is nothing here to declare about."
+        )
+
+    actor = actors.require_decider(session, email=by, kind="ci_change")
+
+    row = session.execute(
+        select(GateIntent).where(
+            GateIntent.product_id == product.id, GateIntent.clause_ref == ref
+        )
+    ).scalar_one_or_none()
+    previous = row.intent if row is not None else None
+    if row is None:
+        row = GateIntent(org_id=product.org_id, product_id=product.id, clause_ref=ref)
+        session.add(row)
+    row.intent = intent
+    row.reason = (reason or "").strip() or None
+    row.declared_by = actor.email
+    session.flush()
+
+    audit.record(
+        session,
+        org_id=product.org_id,
+        actor=actor.email,
+        action=GATE_INTENT_DECLARED,
+        subject=f"clause:{ref}",
+        detail={"intent": intent, "previous": previous, "reason": row.reason,
+                "role": actor.role, "product": product.key},
+    )
+    return {"shape": "answer", "clause_ref": ref, "intent": intent,
+            "previous": previous, "reason": row.reason, "declared_by": actor.email}
+
+
+def gate_intents(session: Session, *, product: Product) -> dict[str, GateIntent]:
+    """Every declaration for this product, by clause ref. A read, so it is not gated.
+
+    Returned as a mapping because every caller asks "what was declared about this ref",
+    and a missing key is the undeclared state.
+    """
+    rows = session.execute(
+        select(GateIntent).where(GateIntent.product_id == product.id)
+    ).scalars().all()
+    return {row.clause_ref: row for row in rows}
 
 
 # -- the queue -------------------------------------------------------------------

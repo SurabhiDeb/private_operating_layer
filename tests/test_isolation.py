@@ -99,3 +99,50 @@ def test_the_tenant_registry_itself_is_not_tenant_scoped():
 
         slugs = set(session.execute(select(Org.slug)).scalars())
     assert "visible-without-context" in slugs
+
+
+@pytest.mark.ac("AC-8")
+def test_every_tenant_table_has_row_level_security_and_a_policy():
+    """A guard on the guard, and the one that scales.
+
+    Every test above names a table. Adding a tenant table without a policy therefore
+    breaks nothing, and the window between a table existing and its policy existing is
+    a window in which a cross-tenant read is legal — which B5 ranks second among the
+    failures this project may not have. This asserts the property of the whole set, so
+    the next table is covered before anyone writes a test for it.
+
+    Read from the live `TENANT_TABLES` on purpose, unlike the migrations, which name
+    their own: here the point is that today's model file has nothing uncovered in it.
+    """
+    from sqlalchemy import text
+
+    from layer.core.config import settings
+    from layer.db.models import TENANT_TABLES
+
+    engine = __import__("sqlalchemy").create_engine(settings.migration_url, future=True)
+    with engine.connect() as conn:
+        enabled = dict(conn.execute(text(
+            "SELECT relname, relrowsecurity FROM pg_class "
+            "WHERE relname = ANY(:names)"
+        ), {"names": list(TENANT_TABLES)}).all())
+        policed = {
+            row[0]: row[1] for row in conn.execute(text(
+                "SELECT tablename, qual FROM pg_policies WHERE tablename = ANY(:names)"
+            ), {"names": list(TENANT_TABLES)}).all()
+        }
+
+    missing_table = sorted(set(TENANT_TABLES) - set(enabled))
+    assert missing_table == [], f"declared tenant tables that do not exist: {missing_table}"
+
+    unprotected = sorted(t for t in TENANT_TABLES if not enabled.get(t))
+    assert unprotected == [], f"tenant tables without row level security: {unprotected}"
+
+    unpoliced = sorted(set(TENANT_TABLES) - set(policed))
+    assert unpoliced == [], f"tenant tables with no policy: {unpoliced}"
+
+    # And the predicate itself, because the `nullif` is what makes a tenant-less session
+    # match no rows instead of raising on an empty string left by a pooled connection.
+    # See layer/db/rls.py; this is the gotcha that cost a session to find.
+    for table, qual in sorted(policed.items()):
+        assert "org_id" in qual, f"{table}: policy does not mention org_id: {qual}"
+        assert "nullif" in qual.lower(), f"{table}: policy omits the nullif: {qual}"

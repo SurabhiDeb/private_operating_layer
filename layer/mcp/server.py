@@ -80,6 +80,10 @@ HUMAN_ONLY = (
     "reject_binding",
     "accept_proposal",
     "reject_proposal",
+    # The same argument as `confirm_binding`, one table further on. Declaring a bar
+    # gateable is the precondition for a `ci_change` proposal about it, so an agent able
+    # to declare its own intent manufactures that precondition and then proposes freely.
+    "declare_gate_intent",
 )
 
 

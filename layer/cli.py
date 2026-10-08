@@ -22,7 +22,7 @@ from layer.core.db import org_session, unscoped_session
 from layer.core.durations import format_duration, parse_duration
 from layer.core.errors import LayerError, Refusal, Unreadable
 from layer.db import models
-from layer.db.models import ACTOR_ROLES, Actor, Org, Product
+from layer.db.models import GATE_INTENTS, ACTOR_ROLES, Actor, Clause, Org, Product
 from layer.answers import decisions
 from layer.findings import queries
 from layer.proposals import generators
@@ -193,6 +193,65 @@ def _bindings_decide(args, decision: str) -> int:
         status = state.refresh(session, product=product, actor=args.actor)
         print(f"{decision}: {args.metric} -> {args.clause}  (by {args.actor})")
         print(f"  {product.key}: {status}")
+    return 0
+
+
+def _clauses_gate(args) -> int:
+    """Declare whether a bar is one a build may fail on. The human-only tier.
+
+    In `decisions`, not `writes`, for the reason `accept_proposal` is: declaring a bar
+    gateable is the precondition for a `ci_change` proposal about it.
+    """
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product)
+        result = decisions.declare_gate_intent(
+            session, product=product, clause_ref=args.clause,
+            intent=args.intent, by=args.actor, reason=args.reason,
+        )
+        was = result["previous"]
+        moved = f" (was {was})" if was and was != result["intent"] else ""
+        print(f"{result['clause_ref']}: {result['intent']}{moved}  "
+              f"(by {result['declared_by']})")
+        if result["reason"]:
+            print(f"  {result['reason']}")
+    return 0
+
+
+def _clauses_list(args) -> int:
+    """Which bars are declared, and which a human still has to rule on.
+
+    The undeclared list is the worklist: every one of them is a stated bar the generator
+    will decline to propose a gate for, and saying so here is the difference between a
+    gap with an owner and a silence.
+    """
+    with org_session(args.org) as session:
+        product = state.get(session, key=args.product)
+        declared = decisions.gate_intents(session, product=product)
+        bars = session.execute(
+            select(Clause)
+            .where(Clause.product_id == product.id, Clause.status == "active",
+                   Clause.value.isnot(None))
+            .order_by(Clause.ref)
+        ).scalars().all()
+
+        if not bars:
+            print(f"{product.key} states no numeric bar, so there is nothing to declare.")
+            return 0
+
+        undeclared = []
+        for clause in bars:
+            row = declared.get(clause.ref)
+            if row is None:
+                undeclared.append(clause)
+                continue
+            print(f"  {clause.ref:12} {row.intent:12} {row.declared_by}")
+            if row.reason:
+                print(f"      {row.reason}")
+        if undeclared:
+            print(f"\n{len(undeclared)} bar(s) with no declaration. The generator "
+                  f"declines to propose a gate for these and reports them instead:")
+            for clause in undeclared:
+                print(f"  {clause.ref:12} {(clause.label or clause.statement)[:70]}")
     return 0
 
 
@@ -472,6 +531,18 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--note")
         p.add_argument("--definition", help="JSON metric definition, confirmed with it")
         p.set_defaults(handler=lambda a, d=decision: _bindings_decide(a, d))
+
+    clauses = sub.add_parser(
+        "clauses", help="what a build may fail on; human-only, like proposals"
+    ).add_subparsers(dest="clauses_command")
+    with_common(clauses.add_parser("list")).set_defaults(handler=_clauses_list)
+    gate = with_common(clauses.add_parser("gate"))
+    gate.add_argument("clause", help="clause ref")
+    gate.add_argument("--intent", required=True, choices=list(GATE_INTENTS),
+                      help="gate: a build may fail on this bar. report_only: it is "
+                           "measured and reported, and no build fails on it")
+    gate.add_argument("--reason", help="required for report_only: why not a gate")
+    gate.set_defaults(handler=_clauses_gate)
 
     with_common(sub.add_parser("measure", help="step 6: verdicts")).set_defaults(handler=_measure)
 

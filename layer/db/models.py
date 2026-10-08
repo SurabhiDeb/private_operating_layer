@@ -293,6 +293,15 @@ DECIDED_STATES = ("accepted", "rejected")
 #: The two the system reached. In neither the numerator nor the denominator.
 SYSTEM_CLOSED_STATES = ("invalidated", "evidence_expired")
 ROW_STATUSES = ("active", "superseded")
+#: Whether a stated bar is the kind of thing a build may fail on. Closed, and a CHECK,
+#: because the `ci_change` generator branches on it.
+#:
+#: There is no `undeclared` member: an undeclared bar is the **absence** of a row, the
+#: same way an unconfirmed binding is. A third value would have to be written by the spec
+#: importer onto every clause it reads, which would make the Layer's own guess
+#: indistinguishable from the owner's declaration — and the guess is the thing that was
+#: wrong.
+GATE_INTENTS = ("gate", "report_only")
 
 # Open vocabularies, validated in Python so a new one needs no migration (rule R3).
 KNOWN_CLAUSE_KINDS = ("threshold", "rule", "contract", "non_goal", "hard_case")
@@ -405,6 +414,70 @@ class Clause(Base):
     statement_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     created_at: Mapped[datetime] = _ts()
+
+
+class GateIntent(Base):
+    """Whether a stated bar is one a build may fail on, declared by a named human.
+
+    The first AC-16 sitting is why this table exists. Fifteen of twenty-one proposals
+    were the same shape — a stated bar with no CI gate — and the generator drew no
+    distinction between a safety bar at 99% and a monthly budget that no single CI run
+    can observe at all. Eight of the eleven rejections were that one gap: a band read as
+    a threshold, a harness latency read as a product latency, a per-run cost read as a
+    stated promise, and one side of a trade-off whose other side is already gated. The
+    rate measured that, not the Layer.
+
+    **The Layer cannot infer it, and the near misses are why.** `unit`, `direction` and
+    `value_high` already separate a band from a threshold, so a band could be excluded by
+    rule. But a latency bar at `<= 3` and a recall bar at `>= 0.99` are the same shape
+    in every column the Layer has, and one is a promise to a customer while the other is
+    a property of whichever machine ran the suite. Nothing in the text separates them.
+    The product's owner knows; the Layer does not, and guessing is what produced the
+    noise.
+
+    **So it is declared, like a binding, and it is keyed like one.** On
+    `(org, product, clause_ref)` rather than on a clause row, because clause rows are
+    versioned and a declaration has to outlive a rewording — the same reason
+    `ClauseIdentity` is its own table. Re-importing a reworded spec must not silently
+    reset it to undeclared, which is how the noise would come back.
+
+    **And declaring it is human-only, for the reason `confirm_binding` is.** A `gate`
+    declaration is the precondition for a `ci_change` proposal about that clause. An
+    agent able to declare its own intent manufactures that precondition and can then
+    propose freely, which is B11's rule drawn at one more place (and why this model is
+    written to by `layer/answers/decisions.py` and never by `writes.py`).
+    """
+
+    __tablename__ = "gate_intent"
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "product_id", "clause_ref", name="uq_gate_intent_clause"
+        ),
+        CheckConstraint("intent IN " + str(GATE_INTENTS), name="ck_gate_intent"),
+        # `report_only` is a judgement about a promise and the reason is the whole value
+        # of it: "a harness number, not a product number" is what stops the same
+        # proposal arriving again next month and being re-argued from scratch.
+        CheckConstraint(
+            "intent <> 'report_only' OR reason IS NOT NULL",
+            name="ck_gate_intent_report_only_has_reason",
+        ),
+        Index("ix_gate_intent_product", "org_id", "product_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("org.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("product.id", ondelete="CASCADE"), nullable=False
+    )
+    clause_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    declared_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    declared_at: Mapped[datetime] = _ts()
 
 
 class ClauseIdentity(Base):
@@ -897,7 +970,7 @@ class Actor(Base):
 #: Every tenant table, in dependency order. Row level security is applied to each.
 #: `org` is absent deliberately: it is the registry of tenants, not tenant content.
 TENANT_TABLES = (
-    "product", "source", "binding", "clause", "clause_identity", "observation",
-    "case_result", "enforcement_fact", "entity", "proposal", "link", "audit_event",
-    "actor",
+    "product", "source", "binding", "clause", "clause_identity", "gate_intent",
+    "observation", "case_result", "enforcement_fact", "entity", "proposal", "link",
+    "audit_event", "actor",
 )
