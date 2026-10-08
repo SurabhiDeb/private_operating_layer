@@ -2369,13 +2369,60 @@ Appendix F enforced on a comment, which is the guard working rather than being t
 Seven tests were added across the two files, each one watched failing against the old
 behaviour before the fix was kept. **683 passed.**
 
+## AC-16: the number, and what it says
+
+**10 accepted, 11 rejected, 21 decided. 47.6%**, which the CLI displays as 48% and labels
+`[noise]`. Below B6's 50% floor. The decisions, with a reason on every rejection, are in
+`ac16-sitting.sh`.
+
+Reported here rather than tuned away, which is EC-5. The band cuts both ways and this
+landed under it by two tenths of a point.
+
+**The rate is not the finding; the shape of the queue is.** Fifteen of the twenty-one
+proposals are the same thing — a stated bar with no CI gate — and the generator draws no
+distinction between a safety bar at 99% and a monthly budget no single CI run can observe
+at all. Eight of the eleven rejections are that one gap:
+
+| Rejected because | Which |
+|---|---|
+| A diagnostic or a band, not a pass-or-fail gate | the clarification-rate band, which is `3% to 8%` — a build failing on within-band movement is noise |
+| A harness number, not a product number | p50 and p95 latency on both products: the eval machine's speed, not the product's |
+| Not observable by one CI run | cost per month, which no single run can see; cost per message and per question, which report whichever model was tested |
+| One side of a trade-off whose other side is gated | escalation precision against escalation recall, abstention precision against abstention recall — gating both blocks the trade the product needs |
+
+The operator's rule was: **gate the bars that are contracts or safety, do not gate
+diagnostics, bands, harness latencies or costs.** Nothing in the Layer knows that
+distinction. `clause` carries `unit`, `direction` and `value_high`, so a band is already
+distinguishable from a threshold in the data; what is missing is whether a bar is the kind
+of thing a build can fail on. That is a property of the clause, declared by the product's
+owner, in the same way `metric_aliases` and `trace_retention` are.
+
+**And a second finding, from the one `clause_change` in the queue.** It proposed lowering
+PD-8.8 from 100% to `0.4545` — the *worst* run on record. Four of the seven runs reached
+0.909. A bar lowered to the worst observation is met by every run by construction, so the
+clause stops discriminating, and for a no-tolerance critical bar it makes the clause
+decorative. `generators.py` sets `new_value` to `detail["worst"]`; the `new_clause`
+generator beside it proposes **no** number and lands the clause `provisional` for a human
+to set, which is the honest shape. Rejected with that reason rather than patched
+mid-sitting.
+
+Neither finding was reachable by reading the code. Both came out of a person disagreeing
+with the queue.
+
 ## Next
 
-**AC-16, which is a sitting rather than a step.** `layer generate` against each onboarded
-product, then `layer proposals list` and decide every one. The band cuts both ways and the
-number lands where it lands: 19 of 20 is a rubber stamp and a failure, 8 of 20 is noise
-(B6, EC-5). Report it wherever it falls.
+**The gate from "Beyond phase 3" has fired, and it fired the way it was set up to.** Below
+50%, no surface gets built around proposals. So phase 4 does not start, and the two
+findings above come first:
 
-Then the decision gate from "Beyond phase 3": below 50%, no surface gets built around
-proposals. Above it, phase 4's half-day spike and the open question about whether the
-surface is Dust at all.
+1. **Whether a bar is gateable is a property of the clause, not of the generator.** Until
+   it exists, roughly two thirds of the `ci_change` queue is noise a human has to clear by
+   hand, and the acceptance rate measures that rather than the Layer.
+2. **A bar nothing ever cleared should not be lowered to the worst run.** Either propose
+   the level the record actually supports, or propose no number and land it `provisional`,
+   as `new_clause` already does.
+
+Then re-run the sitting. A rate measured against a queue that does not ask for gates on
+monthly budgets is a different number, and it is the one worth putting against B6's band.
+Phase 4's half-day spike and the open question about whether the surface is Dust at all
+stay where they are until then.

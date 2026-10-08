@@ -36,10 +36,14 @@ DEFERRED: dict[str, tuple[str, str]] = {
                         "no bindable source produces requirements, decisions or tickets, "
                         "so a real product's chain cannot be complete yet"),
     "AC-16": ("phase 5", "the rate is tested: the arithmetic, both edges of B6's band, "
-                         "and the distinction between unmeasured and zero. What is not "
-                         "tested, and cannot be, is the criterion itself — twenty real "
-                         "proposals decided by a person. That needs the generators and a "
-                         "human's time, and the number has to land where it lands"),
+                         "and the distinction between unmeasured and zero. What no test "
+                         "can assert is the criterion itself — that a person sat down "
+                         "and decided twenty real proposals. That sitting has now "
+                         "happened: 21 proposals against both reference products, 10 "
+                         "accepted and 11 rejected of 21, 47.6%, below B6's 50% "
+                         "floor — the CLI rounds the display to 48%. It is "
+                         "recorded in PROGRESS.md and ac16-sitting.sh because a human's "
+                         "afternoon is not reproducible by the suite"),
     "AC-36": ("phase 6", "harvested_case_yield, which B6 defines as measured no sooner "
                          "than one full eval cycle after a human accepted cases into a "
                          "suite. Two things are missing and only one is code: no "
