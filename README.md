@@ -1,393 +1,254 @@
-# EarlyEcho — Private AI Operating Layer
+# The Layer
 
-EarlyEcho is a done-for-you, single-tenant AI operating layer for small businesses. It captures everything a company knows — decisions, processes, client facts, beliefs — from Slack, email, and uploaded documents, verifies it with a critic agent, stores it in a three-layer memory system, and makes it queryable by the team in plain English.
+**Finds where an AI product has drifted from what it promised, and stops it drifting again.**
 
-Each client runs on their own dedicated server. No shared infrastructure. No shared data.
+An AI team's promises live in a document. Its reality lives in eval tools. Nothing holds
+both, so nobody can reliably answer *"is our product still doing what we said it would"*.
+Eval platforms hold the runs but not the clause. Ticket trackers hold the clause but not
+the runs. The Layer holds **the binding between them** — which measured number answers
+which written promise — with the full history of both, and proposes changes a human decides.
 
----
-
-## Architecture Overview
-
-```
-Data Sources (Slack, Gmail, CSV, Documents)
-        │
-        ▼
-  Pre-filter (noise removal)
-        │
-        ▼
-  Extractor (LLM — gpt-4o-mini)
-        │
-        ▼
-  Critic Agent (confidence scoring)
-        │
-   ┌────┴────┐
-   │         │
-score ≥ 0.7  0.5–0.69       < 0.5
-   │         │               │
-Auto-approve  Human queue   Auto-reject
-   │
-   ▼
-Three-layer memory:
-  ├── Episodic  (PostgreSQL + pgvector)  — semantic search
-  ├── Semantic  (Kuzu graph DB)          — entity relationships
-  └── Procedural (BusinessProfile)      — org-level config & rules
-```
+It is **product agnostic**. It knows nothing about any AI product until that product is
+onboarded from its own spec and its own eval sources, with no code change.
 
 ---
 
-## Tech Stack
+## Status
 
-| Layer | Technology |
+**Phases 1 to 3 and phase 5 are done — 17 steps of 17.** Both halves work end to end: a
+product can be onboarded, interrogated from a terminal or over MCP, and the findings turned
+into proposals a named person accepts or rejects. Every answer cites records a human can
+open. See [`PROGRESS.md`](PROGRESS.md) for the plan, what each step did, and what is left.
+
+| Working now | Not built yet |
 |---|---|
-| API | FastAPI |
-| Database | PostgreSQL + pgvector extension |
-| Graph DB | Kuzu (embedded, per-org) |
-| ORM | SQLAlchemy |
-| Pipeline orchestration | LangGraph |
-| AI model (extraction, chat, agent) | gpt-4o via OpenAI-compatible API |
-| AI model (briefing, critic) | gpt-4o-mini |
-| Scheduler | APScheduler |
-| Slack integration | Slack Bot Token + Nango OAuth |
-| Gmail integration | Google OAuth 2.0 (BYOK — client provides own credentials) |
-| Email inbound | Mailgun BCC webhook |
-| Frontend | Vanilla JS dashboard (single HTML file) |
-| Production supervisor | systemd |
-| Monitoring | UptimeRobot (external ping) + internal dead man's switch |
+| Multi-tenant schema with provable isolation (Postgres row level security) | The critic, which scores and never decides. Deliberately last: it can never gate a spec edit, so it is not on the path to the one metric that matters |
+| All 14 tables, reversibly migrated, with an append-only audit log | The remaining sources: requirement, decision, ticket, config, production |
+| Refs: the `kind:id` citation scheme and its resolver registry | Opening the pull request for an accepted CI change, which needs a scoped GitHub app installation (SEC-3). The approval and the diff are recorded |
+| A git source pinned to an immutable commit | Dust, or any agent runtime. Phase 4 is one `run(transport=...)` argument |
+| The metric engine: reads a number, computes one, or declines to | |
+| Spec, eval and code adapters, with Langfuse as a second transport | |
+| Onboarding: all seven steps, with the binding gate | |
+| Verdicts, via a Wilson interval, degrading when their evidence goes stale | |
+| **All five findings, with resolvable citations** | |
+| **The evidence spine: the individual cases a finding cites** | |
+| **Four generators: findings into ranked, capped proposals** | |
+| **The decide path: accept and reject, by a named person with a role** | |
+| **The proposal acceptance rate, reported against its band in both directions** | |
+| **A stdio MCP server, 20 tools, with the human-only tier absent from it** | |
+| **A CLI: `python -m layer`** | |
+| 675 tests | |
+
+`find_drift`, `find_unenforced` and `find_uncovered` reproduce real breaches from committed
+data, naming the individual cases that missed each bar, with every citation resolving to a
+pinned commit. `find_stalled_decisions` and `find_underspecified` refuse by name until their
+sources exist, which is the designed behaviour rather than a gap.
+
+The write half turns those findings into proposals and stops: a drift becomes a threshold
+change **or** a ticket and never both, an unenforced clause becomes a CI change, a measured
+metric nothing promises becomes a clause to write, and a bar nothing has approached in months
+becomes a candidate for raising. Each one names a single change to a single field, cites
+evidence that resolves, states what happens if it is turned down, and waits. Accepting is
+human-only — absent from the MCP server in any phase, not merely undecorated — and bounded by
+a role: a product manager decides anything, an engineer decides the gate and the eval suite,
+an agent decides nothing. What is missing is the number: twenty proposals decided by a person,
+which needs a person.
 
 ---
 
-## Directory Structure
+## How it is meant to work
+
+Onboarding is the only way anything enters the Layer. There is no demo product, no seeded
+clause set, and no built-in knowledge of any product's metric names or file layout.
 
 ```
-private_operating_layer/
-├── api/
-│   ├── main.py                  # FastAPI app, scheduler, /health endpoint
-│   └── routes/
-│       ├── agent.py             # POST /agent/run
-│       ├── auth.py              # POST /auth/register, /auth/login
-│       ├── chat.py              # POST /chat/ask
-│       ├── context.py           # GET /context/{org_id}, evals, pending queue
-│       ├── email.py             # POST /email/inbound (Mailgun webhook)
-│       ├── ingest.py            # Memory CRUD, approval queue, briefing
-│       ├── integrations.py      # Slack, Gmail, CSV, document upload, status
-│       └── onboarding.py        # POST /onboarding/create, briefing focus
-│
-├── ingestion/
-│   ├── pipeline.py              # LangGraph pipeline: extract → critic → store
-│   ├── extractor.py             # LLM extraction — entities + relationships
-│   ├── critic.py                # Confidence scoring per entity
-│   ├── pre_filter.py            # Noise removal before LLM call
-│   ├── raw_indexer.py           # Stores raw source before processing
-│   └── parsers/
-│       ├── router.py            # Routes uploaded files to correct parser
-│       ├── pdf_parser.py
-│       ├── docx_parser.py
-│       └── excel_parser.py
-│
-├── agent/
-│   ├── runner.py                # LangGraph agent: load_memory → check_limits → execute
-│   ├── tools.py                 # search_memory_tool, draft_content_tool, flag_contradiction_tool
-│   └── limits.py                # Belief-based action guardrails
-│
-├── services/
-│   ├── briefing.py              # Daily briefing generation (gpt-4o-mini, cached)
-│   ├── chat.py                  # Chat with memory retrieval + citation
-│   ├── compile_context.py       # Assembles full context snapshot for an org
-│   ├── heartbeat.py             # Dead man's switch — beat() and check_all()
-│   ├── embeddings.py            # OpenAI text-embedding-ada-002
-│   ├── evaluator.py             # Golden eval runner
-│   ├── graph.py                 # Kuzu read/write — entity nodes + relationships
-│   ├── slack_backfill.py        # Historical Slack ingestion
-│   ├── slack_fetcher.py         # Live Slack message fetching
-│   ├── slack_health.py          # Slack connection health check
-│   ├── gmail_fetcher.py         # Gmail OAuth token refresh + email fetch
-│   ├── backfill_processor.py    # Batch processor for backfill queue
-│   ├── token_tracker.py         # Per-org token usage tracking + budget cap
-│   ├── csv_import.py            # CSV → entity pipeline
-│   ├── entity_mapper.py         # HubSpot-specific field mapping
-│   └── nango.py                 # Nango OAuth helper (Slack)
-│
-├── models/
-│   ├── business_profile.py      # Org config, procedural memory, briefing focus
-│   ├── entities.py              # Core memory table (pgvector embeddings)
-│   ├── pending_entities.py      # Human review queue
-│   ├── sources.py               # Raw ingested content
-│   ├── session_logs.py          # Chat logs, briefings, pipeline events
-│   ├── token_usage.py           # Monthly token counters per org
-│   ├── golden_evals.py          # Q&A eval pairs + scores
-│   ├── oauth_integrations.py    # Gmail OAuth tokens per org
-│   ├── process_heartbeat.py     # Dead man's switch — process last-seen timestamps
-│   ├── channel_memberships.py   # Slack channel membership cache
-│   └── users.py                 # Auth — email/password per org
-│
-├── core/
-│   ├── config.py                # Pydantic settings — reads from .env
-│   └── database.py              # SQLAlchemy engine + session factory
-│
-├── scripts/
-│   └── watchdog.py              # Standalone dead man's switch checker (systemd timer)
-│
-├── deploy/
-│   ├── earlyecho-watchdog.service
-│   └── earlyecho-watchdog.timer
-│
-└── static/
-    ├── index.html               # Dashboard
-    
+  1  register a product                         human
+  2  bind sources   >= 1 spec, >= 1 eval        human
+  3  import the spec        -> clauses          Layer     all provisional, not_measured
+  4  backfill the evals     -> observations     Layer     every run, none skipped
+  5  propose bindings, then STOP                Layer proposes, human confirms
+  6  first measurement pass -> verdicts         Layer     product becomes live
+  7  findings, then proposals                   Layer     read-only findings first
+  8  decide each proposal                       human     by name, bounded by a role
 ```
 
----
+**Step 5 is the gate the whole design turns on.** Before it, the Layer does not know which
+number answers which promise, so anything it proposed would be invented. After it, every
+proposal rests on an assertion a named human confirmed at a recorded time. A product that
+stops at step 4 is still useful — it answers metric history questions and surfaces coverage
+gaps — and it proposes nothing.
 
-## Three-Layer Memory System
+### What comes out
 
-### 1. Episodic Memory — PostgreSQL + pgvector
-Stores every verified fact as a vector embedding. Queried via cosine similarity search.
+Five kinds of finding, all plain SQL over what onboarding loaded:
 
-Table: `entities`
-- `entity_type`: Belief, Decision, Process, Client, Project, Person
-- `content`: the fact in plain text
-- `embedding`: 1536-dimension vector (text-embedding-ada-002)
-- `status`: active | superseded
-- `superseded_by_id`: points to the newer entity if this one has been replaced
+| Finding | The condition |
+|---|---|
+| `drift` | An observation somewhere in the history violates its clause |
+| `unenforced` | A stated threshold that CI does not check — or checks against the wrong run set |
+| `uncovered` | A promise nothing measures, or a measurement nothing promised |
+| `stalled_decision` | A decision that produced no pull request, ticket or spec change |
+| `underspecified` | The eval passes and production is still out of band |
 
-### 2. Semantic Memory — Kuzu (graph)
-Stores relationships between entities. One Kuzu database per org, stored at `kuzu_data/{org_id}/`.
+Then proposals: a threshold change, a ticket, a new clause, a link, an eval case, a CI
+change. Each names one change to one field, cites evidence that resolves, states what
+happens if it is turned down, and is meant to be decidable in under a minute.
 
-Example: `TechFlow (Client) —[works_with]→ Alice (Person)`
-
-Used when the chat agent needs to understand connections, not just facts.
-
-### 3. Procedural Memory — BusinessProfile
-Org-level configuration stored in PostgreSQL.
-- `team_members`: JSON array of people, roles, expertise
-- `workflows`: JSON array of named processes
-- `approval_rules`: per-entity-type confidence thresholds
-- `briefing_focus`: client-defined instructions for the morning briefing
-- `slack_workspace_domain`: used to construct Slack permalink URLs
-
----
-
-## Ingestion Pipeline (LangGraph)
-
-Every piece of content — Slack message, email, CSV row, uploaded document — goes through the same three-node LangGraph pipeline.
-
-### Node 1: Extract
-Calls gpt-4o-mini with the raw content. Returns a list of structured entities (type, name, content) and relationships (from, to, type).
-
-### Node 2: Critic
-For each entity, calls gpt-4o-mini again to score confidence (0.0–1.0) and verify the extraction makes sense in context.
-
-Routing:
-- `score ≥ 0.7` → auto-approved, goes to store node
-- `0.5 ≤ score < 0.7` → sent to human review queue (PendingEntity table)
-- `score < 0.5` → silently rejected, logged
-
-### Node 3: Store
-For auto-approved entities:
-1. Deduplication check — if same name + type already exists as active, skip
-2. Generate embedding and store in `entities` table
-3. Write entity node to Kuzu
-4. Run contradiction check against existing memory — if conflict found, surface as a reviewable item in the pending queue
-
-For pending entities: written to `pending_entities` with `review_type="standard"`.
-
-For contradictions: written to `pending_entities` with `review_type="contradiction"`.
-
-Queue cap: if pending queue reaches 20 items, pipeline pauses and logs a warning.
+**The Layer never decides.** Accepting and rejecting are human-only — absent from the MCP
+server in any phase rather than merely undecorated, because a boundary enforced by an
+agent's tool allowlist is not a boundary — and bounded by a role: a product manager decides
+anything, an engineer decides the gate and the eval suite, an agent decides nothing. A
+proposal whose target a human edits meanwhile is closed as invalidated rather than merged
+over their edit, and one whose evidence retention has deleted is closed as
+evidence-expired rather than shown as live with a dead citation. Neither counts as a
+decision, so neither moves the acceptance rate.
 
 ---
 
-## Agent (LangGraph)
+## The three rules that keep it product agnostic
 
-The agent is a secretary, not an autonomous system. It only acts on verified memory and is blocked by active company beliefs.
+These are enforced by tests, not by convention.
 
-### Node 1: Load Memory
-Searches pgvector for relevant facts. If no memory found, blocks immediately — the agent cannot act without verified context.
+**No product knowledge in code.** Everything product-specific is a row — `product`,
+`source.config`, `binding`, `clause`. No product name, metric name or ref prefix appears
+anywhere outside `tests/`.
 
-### Node 2: Check Limits
-Reads active Beliefs from memory. If the requested task conflicts with a stored belief, the action is blocked with an explanation.
+**Shape in config, mechanism in the adapter.** An adapter may be told *where* to look: a
+glob, a JSON pointer, a heading pattern, a metric definition. It may never contain
+`if product.key == ...`.
 
-### Node 3: Execute
-Runs the task:
-- `draft`: drafts content using memory context
-- `flag`: checks for contradictions in the provided statement
+**Open vocabularies are data.** Adding a source system or a clause kind must not require a
+migration. There are no Postgres enums.
 
----
-
-## Background Jobs (APScheduler)
-
-All jobs run inside the FastAPI process via APScheduler. Each job calls `beat()` when it completes so the dead man's switch can track it.
-
-| Job | Schedule | What it does |
-|---|---|---|
-| `run_daily_ingestion` | Daily 7:00am | Fetches last 24h of Slack messages per org, 5-min gap between orgs |
-| `run_daily_briefings` | Daily 8:00am | Generates and caches morning briefing per org |
-| `run_micro_batch` | Every 30 min | Fetches last 30min of Slack messages — keeps memory current |
-| `_process_backfill_batch` | Every 2 min | Processes queued historical Slack backfill sources |
-| `_run_all_evals` | 1st of month, 6:00am | Runs golden evals against all orgs, scores memory quality |
-| `_run_all_health_checks` | Daily 6:30am | Checks Slack connection health per org |
+A product whose spec the author never saw must onboard with no code change. That is the
+whole bar, and it is why there are three test fixtures rather than two: two specs written by
+one author in one style would prove nothing.
 
 ---
 
-## Dead Man's Switch
+## Running it
 
-Every background job calls `services/heartbeat.beat(process_name)` on completion. This writes a timestamp to the `process_heartbeats` table.
-
-`scripts/watchdog.py` runs every 5 minutes via systemd timer. It calls `check_all()` and alerts if any process hasn't reported within 1.5× its expected interval.
-
-The `/health` endpoint returns live heartbeat status for all processes alongside database connectivity. This is what UptimeRobot watches from outside.
-
-To add real alerting, fill in the `alert()` function in `scripts/watchdog.py` with a Slack webhook or Mailgun call.
-
----
-
-## API Endpoints
-
-### Auth
-| Method | Path | Description |
-|---|---|---|
-| POST | `/auth/register` | Create user + org in one step |
-| POST | `/auth/login` | Returns org_id on success |
-
-### Memory
-| Method | Path | Description |
-|---|---|---|
-| POST | `/memory/ingest` | Manually add content to memory |
-| GET | `/memory/list/{org_id}` | List entities (supports `entity_type`, `limit`, `offset`) |
-| GET | `/memory/briefing/{org_id}` | Load cached daily briefing |
-| GET | `/memory/contradictions/{org_id}` | List contradiction flags |
-| POST | `/memory/queue/{id}/approve` | Approve a pending item |
-| DELETE | `/memory/queue/{id}/reject` | Reject a pending item |
-| POST | `/memory/queue/bulk-approve/{org_id}` | Approve all pending items |
-| DELETE | `/memory/queue/bulk-reject/{org_id}` | Reject all pending items |
-
-### Chat & Agent
-| Method | Path | Description |
-|---|---|---|
-| POST | `/chat/ask` | Ask a question — returns answer with cited source |
-| POST | `/agent/run` | Run an agent task (draft / flag) |
-
-### Context & Evals
-| Method | Path | Description |
-|---|---|---|
-| GET | `/context/{org_id}` | Full context snapshot |
-| GET | `/context/usage/{org_id}` | Token usage summary |
-| GET | `/context/pending/{org_id}` | Pending queue items |
-| POST | `/context/evals/{org_id}` | Add a golden eval pair |
-| POST | `/context/evals/{org_id}/run` | Run evals manually |
-| GET | `/context/entities/{org_id}` | List entities (with status filter) |
-| POST | `/context/entities/{org_id}/supersede` | Mark entity as superseded |
-
-### Integrations
-| Method | Path | Description |
-|---|---|---|
-| POST | `/integrations/slack/backfill` | Trigger Slack historical backfill |
-| GET | `/integrations/slack/health/{org_id}` | Check Slack connection |
-| GET | `/integrations/slack/backfill/status/{org_id}` | Backfill progress |
-| POST | `/integrations/csv/import` | Upload and ingest CSV |
-| POST | `/integrations/document/upload` | Upload PDF, DOCX, or XLSX |
-| POST | `/integrations/gmail/credentials/{org_id}` | Save Gmail OAuth credentials |
-| GET | `/integrations/gmail/connect/{org_id}` | Start Gmail OAuth flow |
-| GET | `/integrations/gmail/callback` | Gmail OAuth callback |
-| POST | `/integrations/gmail/backfill/{org_id}` | Ingest Gmail history |
-| GET | `/integrations/status/{org_id}` | Full status: Gmail, last sync, memory count, queue size |
-
-### Onboarding
-| Method | Path | Description |
-|---|---|---|
-| POST | `/onboarding/create` | Create an org (used internally by /auth/register) |
-| GET | `/onboarding/briefing-focus/{org_id}` | Get current briefing focus |
-| PATCH | `/onboarding/briefing-focus/{org_id}` | Update briefing focus |
-
-### Health
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | DB connectivity + per-process heartbeat status |
-
----
-
-## Environment Variables (.env)
-
-```env
-# Database
-DATABASE_URL=postgresql+psycopg2://localhost/earlyecho
-
-# AI (OpenAI-compatible)
-AI_API_KEY=your_key
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-4o
-AI_MODEL_FAST=gpt-4o-mini
-
-# Slack
-SLACK_BOT_TOKEN=xoxb-...
-NANGO_SECRET_KEY=...
-
-# Gmail inbound (Mailgun)
-MAILGUN_SIGNING_KEY=...
-MAILGUN_DOMAIN=inbound.yourdomain.com
-
-# App
-APP_NAME=EarlyEcho
-DEBUG=false
-```
-
----
-
-## Local Setup
+Requires Postgres 14+ with `pgvector`, and Python 3.13.
 
 ```bash
-# 1. Clone and create virtual environment
-python -m venv venv
-source venv/bin/activate
+# 1. Dependencies, in this repo's own virtualenv
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-layer.txt
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. A database, an owner role, and an application role that owns nothing.
+#    The split is load-bearing: a table's owner is exempt from its own row level
+#    security policies, so the application must not be the owner.
+psql -d postgres <<'SQL'
+CREATE ROLE layer_owner LOGIN PASSWORD 'change-me';
+CREATE ROLE layer_app   LOGIN PASSWORD 'change-me-too';
+CREATE DATABASE layer OWNER layer_owner;
+SQL
+psql -d layer -c 'CREATE EXTENSION IF NOT EXISTS vector'
 
-# 3. Create .env from the template above
+# 3. Configuration
+cp .env.example .env     # then fill in the two database URLs
 
-# 4. Create the database
-createdb earlyecho
+# 4. Schema
+.venv/bin/alembic upgrade head
 
-# 5. Enable pgvector extension
-psql earlyecho -c "CREATE EXTENSION IF NOT EXISTS vector;"
-
-# 6. Start the server (tables are auto-created on startup)
-uvicorn api.main:app --reload
-
-# 7. Open the dashboard
-# http://localhost:8000
+# 5. Tests
+.venv/bin/python -m pytest
 ```
-
----
-
-## Adding a New Column to an Existing Table
-
-`Base.metadata.create_all()` only creates tables that don't exist yet. For columns added to existing tables, run an `ALTER TABLE` manually:
 
 ```bash
-psql postgresql://localhost/earlyecho -c \
-  "ALTER TABLE table_name ADD COLUMN IF NOT EXISTS column_name TYPE;"
+# 6. Onboard a product. Nothing exists in the Layer until this runs.
+.venv/bin/python -m layer org create acme
+.venv/bin/python -m layer product register --org <id> --as you@example.com triage
+.venv/bin/python -m layer source bind   --org <id> --as you@example.com triage \
+    --role spec --kind repo --config '{"local_path":"...","repo_url":"...","path":"SPEC.md"}'
+.venv/bin/python -m layer spec     --org <id> --as you@example.com triage
+.venv/bin/python -m layer backfill --org <id> --as you@example.com triage
+.venv/bin/python -m layer bindings list --org <id> --as you@example.com triage
+#   ... confirm or reject each candidate, then:
+.venv/bin/python -m layer measure  --org <id> --as you@example.com triage
+.venv/bin/python -m layer status   --org <id> --as you@example.com triage
+
+# 7. What the record says.
+.venv/bin/python -m layer findings --org <id> --as you@example.com triage --citations
+```
+
+```bash
+# 8. The write half. Register who may decide, then turn findings into proposals.
+.venv/bin/python -m layer actor add you@example.com --role pm \
+    --org <id> --as you@example.com
+.venv/bin/python -m layer generate --org <id> --as you@example.com triage
+
+# 9. Decide them. `--as` must resolve to a registered actor here, and the role is checked.
+.venv/bin/python -m layer proposals list   --org <id> --as you@example.com --product triage
+.venv/bin/python -m layer proposals accept --org <id> --as you@example.com <proposal-id>
+.venv/bin/python -m layer proposals reject --org <id> --as you@example.com <proposal-id> \
+    --reason "the bar is right; the product is not"
+
+# The one number the product is judged by, with its band in view.
+.venv/bin/python -m layer proposals acceptance --org <id> --as you@example.com
+```
+
+```bash
+# The MCP server, over stdio. The human-only tools are absent from it, in any phase.
+.venv/bin/python -m layer serve --org <id> --as you@example.com
 ```
 
 ---
 
-## Production Deployment
+## Layout
 
-Each client gets a dedicated DigitalOcean droplet running:
-- FastAPI via systemd (auto-restart on crash)
-- nginx as reverse proxy (HTTPS via certbot)
-- systemd timer for the watchdog (every 5 min)
-- UptimeRobot watching `/health` from outside
+```
+layer/
+  core/        config, the org-scoped session, actors and roles, the refusal vocabulary
+  db/          models, migrations, row level security
+  refs/        the kind:id citation scheme and its resolver registry
+  adapters/    sources: spec, eval and code over a pinned git repo, plus Langfuse
+  metrics/     the declarative aggregation engine           (step 5)
+  onboarding/  the seven-step state machine                 (step 7)
+  verdicts/    state and verdict, via a Wilson interval     (step 8)
+  findings/    the five queries and the evidence spine      (steps 8, 10)
+  answers/     the read tier, the write tier, and the human-only decide path
+  proposals/   the generators: findings into ranked proposals  (step 16)
+  mcp/         the stdio server                             (step 12)
+tests/         the suite; tests/fixtures/ is the only place a real product is named
+docs/          EARLYECHO.md, the previous occupant of this file
+operating_layer_main/   the specification, the handoff, and a UI mock
+```
 
-See `deploy/` for systemd unit files.
+## Documents
+
+| File | What it is |
+|---|---|
+| [`PROGRESS.md`](PROGRESS.md) | The build plan, step status, and how each finished step was built |
+| [`CLAUDE.md`](CLAUDE.md) | Working context: constraints, decisions taken, gotchas already paid for |
+| `operating_layer_main/PRD-SPEC.md` | The specification. Defines what correct means. Cited throughout as `AC-n`, `H-n`, `EC-n`, `US-n` |
+| `operating_layer_main/HANDOFF.md` | Decision history, the stack, the security audit |
+| `operating_layer_main/Operating Layer.html` | A UI mock. Reference for output shapes only — its data is hand-written, not generated |
 
 ---
 
-## Phase 2 (Planned)
+## Design decisions worth knowing
 
-- Docker + centralised control panel
-- Native PM tool integrations (Linear, Jira, Notion)
-- Meeting transcript ingestion
-- Per-client managed API keys (no BYOK)
-- Flat capped pricing tier
-- Alembic migrations (replace manual ALTER TABLE)
+- **Postgres only** for observations, behind a store interface. The specification suggests a
+  columnar store; at this volume it would buy nothing and cost a week.
+- **Verdicts use a Wilson score interval**, so a clause reads `met` only when the interval
+  clears its bar. A 7-run sample claiming 99% recall is a guess, and most clauses will
+  honestly read `cannot_confirm`. That is the intended behaviour, not a gap.
+- **Citations pin a commit, never a branch.** A finding citing `blob/main/SPEC.md` becomes
+  wrong the moment someone edits the file, and the reader cannot tell.
+- **It never states a cause.** "X first failed at v3 and the prompt sha changed at v3" is
+  allowed. "The prompt change caused it" is not. One wrong confident attribution would
+  discredit everything else the system says.
+- **Nothing is written without an approval record**, and the approval boundary lives inside
+  the server rather than in an agent's prompt, so it holds however an agent is configured.
+
+## EarlyEcho
+
+This repository also contains EarlyEcho, a single-tenant Slack and Gmail business-memory
+product, under `agent/`, `api/`, `core/`, `ingestion/`, `models/`, `services/`, `scripts/`,
+`static/`, `deploy/` and `db/`. Its documentation is [`docs/EARLYECHO.md`](docs/EARLYECHO.md).
+
+The two share a repository and nothing else — no imports, no tables, no configuration. The
+Layer borrowed four ideas from it (versioned entities, a critic that scores proposals, a
+human review queue, `org_id` on every row) and reimplemented them. Anything outside `layer/`
+and `tests/` is EarlyEcho's.

@@ -1,0 +1,12 @@
+# The Layer — phases 1 to 3. Separate from requirements.txt, which is EarlyEcho's.
+SQLAlchemy==2.1.1
+alembic==1.20.0
+psycopg[binary]==3.3.6
+pgvector==0.5.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+openai==3.22.1
+anthropic==1.11.0
+httpx==0.28.1
+mcp==2.2.0
+pytest==9.1.1

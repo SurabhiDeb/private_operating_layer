@@ -1,0 +1,58 @@
+{
+  "why": [
+    "Written for the redaction test, and the reason it exists is that the reference",
+    "corpora cannot prove anything about redaction: 876 input fields across both",
+    "fixture products contain no email, phone, card, sort code, postcode, IBAN or",
+    "National Insurance number at all. Their authors wrote clean synthetic text, so a",
+    "test over them passes whether the redactor works or not.",
+    "",
+    "Each case below carries the literal strings that must not survive, written out by",
+    "hand rather than found with the same regular expressions the redactor uses. That",
+    "is what makes the assertion non-circular: the test checks these exact substrings",
+    "are absent from the stored text, so a pattern that silently stops matching fails",
+    "the test even though redact() and find_pii() would still agree with each other.",
+    "",
+    "The last case is the honest limit. A name and a bereavement are personal data by",
+    "any reading and no pattern will mask them, which is why an input is stored only",
+    "for a case that did not pass, and why the untouched conversation stays at the",
+    "source behind trace_url."
+  ],
+  "cases": [
+    {
+      "id": "pii-1",
+      "input": "Email me at jo.smith+bank@example.co.uk, or ring 07700 900123.",
+      "must_not_survive": ["jo.smith+bank@example.co.uk", "07700 900123"]
+    },
+    {
+      "id": "pii-2",
+      "input": "My card 4111 1111 1111 1111 was declined at the till again.",
+      "must_not_survive": ["4111 1111 1111 1111"]
+    },
+    {
+      "id": "pii-3",
+      "input": "Pay it to sort code 12-34-56, account 87654321, please.",
+      "must_not_survive": ["12-34-56", "87654321"]
+    },
+    {
+      "id": "pii-4",
+      "input": "Send the letter to SW1A 1AA. My NI number is JG 12 34 56 A.",
+      "must_not_survive": ["SW1A 1AA", "JG 12 34 56 A"]
+    },
+    {
+      "id": "pii-5",
+      "input": "Transfer from GB29 NWBK 6016 1331 9268 19 failed from 10.0.0.255.",
+      "must_not_survive": ["GB29 NWBK 6016 1331 9268 19", "10.0.0.255"]
+    },
+    {
+      "id": "pii-6",
+      "input": "Card 4111-1111-1111-1111 and +44 7700 900123 on the same account.",
+      "must_not_survive": ["4111-1111-1111-1111", "7700 900123"]
+    },
+    {
+      "id": "pii-7-the-limit",
+      "input": "My husband Daniel passed away last month and I need to close his account.",
+      "must_not_survive": [],
+      "note": "No pattern masks a name or a bereavement. This case documents the limit rather than asserting a capability."
+    }
+  ]
+}

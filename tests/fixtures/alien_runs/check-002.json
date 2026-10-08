@@ -1,0 +1,10 @@
+{
+  "header": {"ticket": "wf-002", "when": "2026-09-02T09:00:00Z", "build": "a1b2c32",
+             "corpus": "cat-7", "prompt": "wf-prompt-v2"},
+  "checks": [
+    {"ref": "w-1", "suggested": "replace_unit", "wanted": "replace_unit", "usable_photo": "yes", "ms": 902},
+    {"ref": "w-2", "suggested": "replace_unit", "wanted": "clean_filter",  "usable_photo": "yes", "ms": 1202},
+    {"ref": "w-3", "suggested": "cannot_tell",  "wanted": "cannot_tell",   "usable_photo": "no",  "ms": 702},
+    {"ref": "w-4", "suggested": "clean_filter", "wanted": "clean_filter",  "usable_photo": "yes", "ms": 1102}
+  ]
+}
